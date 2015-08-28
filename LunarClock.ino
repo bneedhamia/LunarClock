@@ -14,23 +14,25 @@
  
 /*
  * This sketch requires an Arduino Mega 2560,
- * SparkFun WiFi Shield ESP8266 on it,
+ * a SparkFun WiFi Shield ESP8266 on it,
  * XXX and hardware to be chosen.
  */
 
 /*
  * Include the the modified Sparkfun ESP8266 Shield library,
  * modified to support the Arduino Mega hardware Serial pins.
+ * XXX fork the Sparkfun library, branch it properly, submit a pull request,
+ * then point to it here.
  */
-#include <SoftwareSerial.h> 
-#include <SparkFunESP8266WiFi.h>
-#include <float.h>  // For DBL_MAX
-#include <ESP8266HttpRead.h>
+#include <SoftwareSerial.h>       // Required by SparkfunESP8266WiFi.h
+#include <SparkFunESP8266WiFi.h>  //XXX github url of the modified library to be put here.
+#include <float.h>                // For DBL_MAX
+#include <ESP8266HttpRead.h>      // https://github.com/bneedhamia/ESP8266HttpRead
 
 /*
  * Pins:
  *
- * Wifi ESP8266 Shield Pins:
+ * Wifi ESP8266 Shield related Pins:
  * Note: the shield header pins 8 and 9 must be cut so they don't connect to the Arduino.
  * pin 15 = Mega Serial3 Rx (ESP8266 Tx).  Mega pin 15 must be wired to pin 8 on the shield.
  * pin 14 = Mega Serial3 Tx (ESP8266 Rx).  Mega pin 14 must be wired to pin 9 on the shield.
@@ -42,8 +44,8 @@
  */
 
 // Fill these constants in with values for your network.
-char *wifiSsid = "needhamia4";          // SSID of the network to connect to.
-char *wifiPassword = "qtestdogintheworld"; // password of the network.
+char *wifiSsid = "XXXYourSSIDXXX";          // SSID of the network to connect to.
+char *wifiPassword = "XXXYourPasswordXXX"; // password of the network.
 
 ESP8266Client client;   // Client for using the ESP8266 WiFi board.
 
