@@ -4,7 +4,7 @@ as reported by
 [HM Nautical Almanac Office: Miscellanea, Daily Rise/set and Twilight times for the British Isles]
 (http://astro.ukho.gov.uk/nao/miscellanea/birs2.html).
 
-That page provides the time of sunrise/sunset/etc., for many locations in Britain.
+That page provides the time of sunrise/sunset/etc., for many locations in Britain and Ireland.
 The end of that page provides the age of the moon (days since the new moon) and
 the percentage of its face that is illuminated.
 
