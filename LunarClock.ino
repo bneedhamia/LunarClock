@@ -28,6 +28,7 @@
 #include <SparkFunESP8266WiFi.h>  //XXX github url of the modified library to be put here.
 #include <float.h>                // For DBL_MAX
 #include <ESP8266HttpRead.h>      // https://github.com/bneedhamia/ESP8266HttpRead
+#include <EEPROM.h>
 
 /*
  * Pins:
@@ -43,9 +44,20 @@
  *  Note: that means that the normal pin 13 LED is not usable as an LED.
  */
 
-// Fill these constants in with values for your network.
-char *wifiSsid = "XXXYourSSIDXXX";          // SSID of the network to connect to.
-char *wifiPassword = "XXXYourPasswordXXX"; // password of the network.
+/*
+ * The EEPROM layout, starting at START_ADDRESS, is:
+ * WiFi SSID = null-terminated string 0
+ * WiFi Password = null-terminated string 1
+ * EEPROM_END_MARK
+ * 
+ * To write these values, use the Sketch write_eeprom_strings.
+ * See https://github.com/bneedhamia/write_eeprom_strings
+ */
+const int START_ADDRESS = 0;      // First address of EEPROM to write to.
+const byte EEPROM_END_MARK = 255; // marks the end of the data we wrote to EEPROM
+
+char *wifiSsid;     // SSID of the network to connect to. Read from EEPROM.
+char *wifiPassword; // password of the network. Read from EEPROM.
 
 ESP8266Client client;   // Client for using the ESP8266 WiFi board.
 
@@ -97,6 +109,14 @@ void setup() {
   
   Serial.println(F("Starting..."));
 
+  // read the wifi credentials from EEPROM, if they're there.
+  wifiSsid = readEEPROMString(START_ADDRESS, 0);
+  wifiPassword = readEEPROMString(START_ADDRESS, 1);
+  if (wifiSsid == 0 || wifiPassword == 0) {
+    Serial.println(F("EEPROM not initialized."));
+    return;
+  }
+  
   // Setup the WiFi shield
  
   if (!esp8266.begin(9600, ESP8266_HARDWARE_SERIAL3)) {
@@ -244,6 +264,74 @@ boolean query(ESP8266HttpRead::HttpDateTime *pDateTimeUTC, double *pDaysSinceNew
   
   return true;
 }
+
+/********************************
+ * From https://github.com/bneedhamia/write_eeprom_strings example
+ */
+/*
+ * Reads a string from EEPROM.  Copy this code into your program that reads EEPROM.
+ * 
+ * baseAddress = EEPROM address of the first byte in EEPROM to read from.
+ * stringNumber = index of the string to retrieve (string 0, string 1, etc.)
+ * 
+ * Assumes EEPROM contains a list of null-terminated strings,
+ * terminated by EEPROM_END_MARK.
+ * 
+ * Returns:
+ * A pointer to a dynamically-allocated string read from EEPROM,
+ * or null if no such string was found.
+ */
+char *readEEPROMString(int baseAddress, int stringNumber) {
+  int start;   // EEPROM address of the first byte of the string to return.
+  int length;  // length (bytes) of the string to return, less the terminating null.
+  char ch;
+  int nextAddress;  // next address to read from EEPROM.
+  char *result;     // points to the dynamically-allocated result to return.
+  int i;
+
+  nextAddress = START_ADDRESS;
+  for (i = 0; i < stringNumber; ++i) {
+
+    // If the first byte is an end mark, we've run out of strings too early.
+    ch = (char) EEPROM.read(nextAddress++);
+    if (ch == (char) EEPROM_END_MARK || nextAddress >= EEPROM.length()) {
+      return (char *) 0;  // not enough strings are in EEPROM.
+    }
+
+    // Read through the string's terminating null (0).
+    while (ch != '\0' && nextAddress < EEPROM.length()) {
+      ch = EEPROM.read(nextAddress++);
+    }
+  }
+
+  // We're now at the start of what should be our string.
+  start = nextAddress;
+
+  // If the first byte is an end mark, we've run out of strings too early.
+  ch = (char) EEPROM.read(nextAddress++);
+  if (ch == (char) EEPROM_END_MARK) {
+    return (char *) 0;  // not enough strings are in EEPROM.
+  }
+
+  // Count to the end of this string.
+  length = 0;
+  while (ch != '\0' && nextAddress < EEPROM.length()) {
+    ++length;
+    ch = EEPROM.read(nextAddress++);
+  }
+
+  // Allocate space for the string, then copy it.
+  result = new char[length + 1];
+  nextAddress = start;
+  for (i = 0; i < length; ++i) {
+    result[i] = (char) EEPROM.read(nextAddress++);
+  }
+  result[i] = '\0';
+
+  return result;
+
+}
+
 
 //************************************************************************
 // From http://www.avr-developers.com/mm/memoryusage.html
