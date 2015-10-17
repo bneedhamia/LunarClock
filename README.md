@@ -8,11 +8,10 @@ That page provides the time of sunrise/sunset/etc., for many locations in Britai
 The end of that page provides the age of the moon (days since the new moon) and
 the percentage of its face that is illuminated.
 
-XXX Not ready to use yet.  I'm currently developing it.
-in particular, it uses a modified version of the Sparkfun ESP8266 WiFi
-Shield library, and I'm waiting to commit that until I learn how
-to create a good pull request.  The mods to the library are to support
-the Serial1, Serial2, and Serial3 pins of the Arduino Mega.
+The current Sketch requires an Arduino Mega, a Sparkfun Transmogrishield,
+and a Sparkfun CC3000 WiFi Shield.  Details are in the code.
 
-State: it reads HM Almanac page to read the date/time (UTC), the current age of the moon,
+NOTE: This is a work in progress. I'm currently developing it.
+
+State: it reads HM Almanac page to read the date/time (UTC), the current age of the moon in days,
 and percent of its face that is illuminated.
