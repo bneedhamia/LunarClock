@@ -1,6 +1,6 @@
 /*
  * Net-connected lunar clock.
- * Shows the current phase of the moon,
+ * Rotates a dial showing the current phase of the moon,
  * as reported by HM Nautical Almanac Office: Miscellanea,
  * Daily Rise/set and Twilight times for the British Isles,
  * at http://astro.ukho.gov.uk/nao/miscellanea/birs2.html
@@ -18,12 +18,14 @@
 /*
  * This sketch requires an Arduino Mega 2560,
  * a Sparkfun Transmogrishield on top of that
- * (https://www.sparkfun.com/products/11469)
+ * (https://www.sparkfun.com/products/11469),
  * a Sparkfun CC3000 WiFi Shield on top of that
- * (https://www.sparkfun.com/products/12071)
- * a 30BYJ02AH unipolar stepper motor
+ * (https://www.sparkfun.com/products/12071),
+ * a 30BYJ02AH unipolar stepper motor  XXX to be replaced with one that's in stock
  * (Datasheet at http://www.kysanelectronics.com/Products/datasheet_display.php?recordID=1750)
- * controlled by a set of discrete parts (TIP120s)
+ * controlled by a set of discrete parts (TIP120s),
+ * an opto-interrupter for aligning the image of the moon.
+ * XXX and more parts.
  *
  * The Transmogrishield is needed because the SPI pins
  * are different on the Arduino Mega than the Uno.
@@ -55,11 +57,13 @@
  * PIN_STEP_YELLOW
  * PIN_STEP_PINK
  * PIN_STEP_BLUE
+ * 
+ * PIN_LED_YELLOW = HIGH to light the yellow LED.
  *
  * XXX more to come.
  *
  * Pins 10-13 are the Mega SPI bus.
- *  Note: that means that the normal pin 13 LED is not usable as an LED.
+ * Note: that means that the normal pin 13 LED is not usable as an LED.
  */
 const int PIN_WIFI_INT = 2;
 const int PIN_WIFI_ENABLE = 7;
@@ -70,6 +74,8 @@ const int PIN_STEP_ORANGE = 28;
 const int PIN_STEP_PINK = 26;
 const int PIN_STEP_YELLOW = 24;
 const int PIN_STEP_BLUE = 22;
+
+const int PIN_LED_YELLOW = 30;
 
 /*
  * The EEPROM layout, starting at START_ADDRESS, is:
@@ -108,7 +114,7 @@ double readDouble();
 
 /*
  * Speed (Revolutions per minute) to run the stepper motor.
- * The pin documentation above seems to say 2ms is the minimum per step.
+ * The stepper documentation below seems to say 2ms is the minimum per step.
  * Experimentation shows with half-stepping 4ms is good; 10 is strong & slow; 2 is fast & weak.
  * With full-stepping, the longer time doesn't seem to make a difference in torque.
  * 
@@ -188,25 +194,46 @@ const String HttpRequest = "GET /nao/miscellanea/birs2.html HTTP/1.0\n"
                            "Connection: close\n"
                            "\n";
 
+/*
+ * Our state machine, that keeps track of what to do next.
+ * 
+ * STATE_ERROR = Startup encountered and unrecoverable error.
+ * STATE_FIND_SLOT = search for the slot that tells us the wheel position.
+ * STATE_WEB_QUERY = query the web site to find the time and moon phase.
+ * STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
+ * STATE_WAITING = waiting for the time to query the site again.
+ * STATE_DONE = used only for development. Says we're done.
+ * 
+ * state = the current state of the program.
+ * 
+ */
+const byte STATE_ERROR        = 0;
+const byte STATE_FIND_SLOT    = 1;
+const byte STATE_WEB_QUERY    = 2;
+const byte STATE_TURN_WHEEL   = 3;
+const byte STATE_WAITING      = 4;
+const byte STATE_DONE         = 5;
+byte state;
+
 boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
               int *pIlluminatedPC);
 
 void setup() {
   Serial.begin(9600);
 
-  //XXX I think the stepper library does this for us.
-  //pinMode(PIN_STEP_ORANGE, OUTPUT);
-  //pinMode(PIN_STEP_YELLOW, OUTPUT);
-  //pinMode(PIN_STEP_PINK, OUTPUT);
-  //pinMode(PIN_STEP_BLUE, OUTPUT);
+  pinMode(PIN_LED_YELLOW, OUTPUT);
+  digitalWrite(PIN_LED_YELLOW, LOW);
 
   Serial.println(F("Reset."));
+
+  state = STATE_ERROR; 
 
   // read the wifi credentials from EEPROM, if they're there.
   wifiSsid = readEEPROMString(START_ADDRESS, 0);
   wifiPassword = readEEPROMString(START_ADDRESS, 1);
   if (wifiSsid == 0 || wifiPassword == 0) {
     Serial.println(F("EEPROM not initialized."));
+    state = STATE_ERROR;
     return;
   }
 
@@ -221,38 +248,75 @@ void setup() {
   // Setup the WiFi shield
   if (!wifi.init()) {
     Serial.println(F("wifi.init() failed."));
+    state = STATE_ERROR;
     return;
   }
 
-  //XXX on success, set a state to let the loop know.
-
-  //XXX this wifi activity will eventually move into the 'get lunar phase' function.
-  //if (!doNetworkWork()) {
-  //  return;
-  //}
-
+  // initialization is complete.
+  state = STATE_FIND_SLOT;
 }
 
-boolean doneloop = false;
 void loop() {
+  int i;
 
-  if (!doneloop) {
-    //XXX test the stepper library.
-    unsigned long startms = millis();
-    for (int i = 0; i < STEPS_PER_REVOLUTION; ++i) {
-      stepper.step(-1);
-      // Can check the opto-interruptor here.
+  switch (state) {
+    
+  case STATE_ERROR: // unrecoverable error.  Stop.
+    // Blink an led
+    if ((millis() % 1000) < 500) {
+      digitalWrite(PIN_LED_YELLOW, HIGH);
+    } else {
+      digitalWrite(PIN_LED_YELLOW, LOW);
     }
-    //stepper.step(STEPS_PER_REVOLUTION);
-    unsigned long stopms = millis();
-    double rpm = (1.0 / (stopms - startms)) * 1000.0 * 60.0;
-    Serial.print(rpm);
-    Serial.println(" rpm");
+    delay(10); // so we don't spend all our time doing digitalWrite()
+    break;
+
+  case STATE_FIND_SLOT:  // rotate the wheel to the slot, so we know the wheel position.
+
+    //XXX decide how to reliably find one or the other edge of the slot.
+    // Turn up to 1.5 revolutions to find the slot in the wheel.
+    for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 2); ++i) {
+      stepper.step(1);
+      //XXX check the opto-interruptor here.
+    }
+
+    // If we didn't find the slot, that's an unrecoverable error.
+    //XXX do it.
+
+    // The wheel is zeroed.  Find the date and phase of the moon.
+    state = STATE_WEB_QUERY;
+    break;
+
+  case STATE_WEB_QUERY:      // Find the date and the phase of the moon.
+    if (!doNetworkWork()) {
+      //XXX set how long to wait, say 1 minute.  Keep track of # of fails.
+      state = STATE_WAITING;
+      break;
+    }
+
+    // We now know the date and the phase of the moon.
+    state = STATE_TURN_WHEEL;
+    break;
+
+  case STATE_TURN_WHEEL:  // turn the wheel to the current phase of the moon
+    state = STATE_ERROR; //XXX for now.
+    break;
+
+  case STATE_WAITING:   // waiting until it's the right time to query again.
+    //XXX this state is used to retry a failed query as well as to wait a day to query again.
+    //XXX watch out for daylight saving time.  Just do an offset from midnight UTC,
+    //XXX knowing that it will be an hour different in daylight time.
+    //XXX be aware that millis() will overflow every ~49.7 days.
+    //XXX 24 hours = (unsigned long) 1000 * 60 * 60 * 24 = 86,400,000 milliseconds.
+    state = STATE_ERROR; //XXX for now.
+    break;
+
+  default:
+    Serial.print(F("Unknown state, "));
+    Serial.println(((int) state) & 0xFF);
+    state = STATE_ERROR;
   }
 
-  doneloop = true;
-
-  delay(1000);
 }
 
 /*
