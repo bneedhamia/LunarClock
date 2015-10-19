@@ -4,7 +4,7 @@
  * as reported by HM Nautical Almanac Office: Miscellanea,
  * Daily Rise/set and Twilight times for the British Isles,
  * at http://astro.ukho.gov.uk/nao/miscellanea/birs2.html
- * 
+ *
  * Note: that web page is Crown Copyright.
  * Read the site Copyright and Licensing page before using it.
  *
@@ -14,15 +14,17 @@
  * Licensed under GPL V2
  * a copy of which should have been supplied with this file.
  */
- 
+
 /*
  * This sketch requires an Arduino Mega 2560,
  * a Sparkfun Transmogrishield on top of that
  * (https://www.sparkfun.com/products/11469)
  * a Sparkfun CC3000 WiFi Shield on top of that
  * (https://www.sparkfun.com/products/12071)
- * XXX and hardware to be chosen.
- * 
+ * a 30BYJ02AH unipolar stepper motor
+ * (Datasheet at http://www.kysanelectronics.com/Products/datasheet_display.php?recordID=1750)
+ * controlled by a set of discrete parts (TIP120s)
+ *
  * The Transmogrishield is needed because the SPI pins
  * are different on the Arduino Mega than the Uno.
  */
@@ -33,6 +35,7 @@
 #include <SFE_CC3000.h>
 #include <SFE_CC3000_Client.h>
 #include <EEPROM.h>
+#include <Stepper.h>
 
 /*
  * Pins:
@@ -42,6 +45,16 @@
  * PIN_WIFI_ENABLE = enable pin for with Wifi Shield
  * PIN_SELECT_WIFI = the CC3000 chip select pin.
  * PIN_SELECT_SD = the SD chip select pin (currently unused)
+ *
+ * Pins controlling the stepper motor.
+ * These pins control the Base voltages of each
+ * of the 4 non-common wires of the stepper motor.
+ * Active High.  That is, a HIGH value sends current
+ * through the corresponding wire and coil.
+ * PIN_STEP_ORANGE
+ * PIN_STEP_YELLOW
+ * PIN_STEP_PINK
+ * PIN_STEP_BLUE
  *
  * XXX more to come.
  *
@@ -53,12 +66,17 @@ const int PIN_WIFI_ENABLE = 7;
 const int PIN_SELECT_WIFI = 10;
 const int PIN_SELECT_SD = 8;
 
+const int PIN_STEP_ORANGE = 28;
+const int PIN_STEP_PINK = 26;
+const int PIN_STEP_YELLOW = 24;
+const int PIN_STEP_BLUE = 22;
+
 /*
  * The EEPROM layout, starting at START_ADDRESS, is:
  * WiFi SSID = null-terminated string 0
  * WiFi Password = null-terminated string 1
  * EEPROM_END_MARK
- * 
+ *
  * To write these values, use the Sketch write_eeprom_strings.
  * See https://github.com/bneedhamia/write_eeprom_strings
  */
@@ -70,9 +88,6 @@ char *wifiPassword; // password of the network. Read from EEPROM.
 //XXX should put the security type in the EEPROM as well.
 unsigned int wifiSecurity = WLAN_SEC_WPA2; // security type of the network.
 unsigned int wifiTimeoutMs = 20 * 1000;  // connection timeout.
-
-SFE_CC3000 wifi = SFE_CC3000(PIN_WIFI_INT, PIN_WIFI_ENABLE, PIN_SELECT_WIFI);
-SFE_CC3000_Client client = SFE_CC3000_Client(wifi);
 
 /*
  * The Date and Time returned from parseDate().
@@ -92,6 +107,54 @@ boolean findDate(struct HttpDateTime *pDateTimeUTC);
 double readDouble();
 
 /*
+ * Speed (Revolutions per minute) to run the stepper motor.
+ * The pin documentation above seems to say 2ms is the minimum per step.
+ * Experimentation shows with half-stepping 4ms is good; 10 is strong & slow; 2 is fast & weak.
+ * With full-stepping, the longer time doesn't seem to make a difference in torque.
+ * 
+ * The datasheet specifies a step angle of 7.5/85.25 degrees.
+ * It's specified that way because the stepper has a 1/85.25 gear ratio.
+ * But that specifies half-stepping, and the Stepper library does full stepping,
+ * so the effective step angle is double the specified one
+ * = 7.5 / 85.25 * 2
+ *
+ * Putting this into the stepper library's RPM measure:
+ * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
+ * mS/minute   / steps per revolution / mS per step =
+ * (1000 * 60) / 2046                 / 4 = 7.33 rpm (round down to 7 rpm)
+ *
+ */
+const int STEPS_PER_REVOLUTION = 2046; // = 360 / (7.5/85.25 * 2.0)
+const int STEPPER_RPM = 7;
+
+/*
+ * Stepper motor pin sequence.
+ *
+ * Motor documentation at http://www.kysanelectronics.com/graphics/1139001-1.pdf
+ * gives an order of
+ * ORG->PIN (pink) -> YEL -> BLU for counterclockwise (from shaft side) rotation.
+ * The reverse of that sequence is clockwise.
+ * The datasheet shows half-stepping, which the Arduino Stepper library doesn't do.
+ *
+ * I tested the datasheet's sequence by trying the 6 permutations
+ * of pin sequences that begin with pinO. Only two caused any rotation at all:
+ * one caused counterclockwise rotation, and its reverse caused counterclockwise rotation.
+ */
+Stepper stepper(STEPS_PER_REVOLUTION,
+    PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE);    // Clockwise
+    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_ORANGE, PIN_STEP_PINK);  // weak CCW
+    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_YELLOW, PIN_STEP_ORANGE);  // nothing
+    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_ORANGE, PIN_STEP_YELLOW);  //nothing
+    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK);  // weak/nothing
+    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW);  //nothing. odd should be cw.
+
+//XXX remember to initialize the motor by moving until it gets to a known spot.
+
+// WiFi and WiFi Client control objects.
+SFE_CC3000 wifi = SFE_CC3000(PIN_WIFI_INT, PIN_WIFI_ENABLE, PIN_SELECT_WIFI);
+SFE_CC3000_Client client = SFE_CC3000_Client(wifi);
+
+/*
  * The date is received from the Http "Date:" header in the web response we receive.
  * Note: that date is GMT rather than local time, but we don't care
  * because we use the date/time only to decide when to read the web site again.
@@ -106,7 +169,7 @@ int illuminatedPC;       // percent (0..100) of the moon's surface that's illumi
  * The site to query:
  *   HM Nautical Almanac Office: Miscellanea.
  *   Daily Rise/set and Twilight times for the British Isles.
- * 
+ *
  * Notes:
  * - HTTP 1.0 (rather than 1.1) is specified here to prevent
  *   the server from using Transfer-encoding: chunked,
@@ -126,16 +189,18 @@ const String HttpRequest = "GET /nao/miscellanea/birs2.html HTTP/1.0\n"
                            "\n";
 
 boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-    int *pIlluminatedPC);
+              int *pIlluminatedPC);
 
 void setup() {
   Serial.begin(9600);
+
+  //XXX I think the stepper library does this for us.
+  //pinMode(PIN_STEP_ORANGE, OUTPUT);
+  //pinMode(PIN_STEP_YELLOW, OUTPUT);
+  //pinMode(PIN_STEP_PINK, OUTPUT);
+  //pinMode(PIN_STEP_BLUE, OUTPUT);
+
   Serial.println(F("Reset."));
-  
-  // Give the developer a chance to start the Serial Monitor
-  delay(5000);
-  
-  Serial.println(F("Starting..."));
 
   // read the wifi credentials from EEPROM, if they're there.
   wifiSsid = readEEPROMString(START_ADDRESS, 0);
@@ -144,25 +209,69 @@ void setup() {
     Serial.println(F("EEPROM not initialized."));
     return;
   }
-  
+
+  stepper.setSpeed(STEPPER_RPM);
+
+  // Give the developer a chance to start the Serial Monitor
+  // before setting up the WiFi
+  delay(5000);
+
+  Serial.println(F("Starting..."));
+
   // Setup the WiFi shield
   if (!wifi.init()) {
     Serial.println(F("wifi.init() failed."));
     return;
   }
-    
+
   //XXX on success, set a state to let the loop know.
 
   //XXX this wifi activity will eventually move into the 'get lunar phase' function.
+  //if (!doNetworkWork()) {
+  //  return;
+  //}
 
+}
+
+boolean doneloop = false;
+void loop() {
+
+  if (!doneloop) {
+    //XXX test the stepper library.
+    unsigned long startms = millis();
+    for (int i = 0; i < STEPS_PER_REVOLUTION; ++i) {
+      stepper.step(-1);
+      // Can check the opto-interruptor here.
+    }
+    //stepper.step(STEPS_PER_REVOLUTION);
+    unsigned long stopms = millis();
+    double rpm = (1.0 / (stopms - startms)) * 1000.0 * 60.0;
+    Serial.print(rpm);
+    Serial.println(" rpm");
+  }
+
+  doneloop = true;
+
+  delay(1000);
+}
+
+/*
+ * Performs one run of our network activity:
+ * Connects to the WiFi access point,
+ * performs the lunar phase query,
+ * then disconnects.
+ *
+ * Returns true if successful; false otherwise.
+ */
+boolean doNetworkWork() {
   Serial.print(F("Connecting to "));
   Serial.print(wifiSsid);
   Serial.println(F(" ..."));
-  
+
   if (!wifi.connect(wifiSsid, wifiSecurity, wifiPassword, wifiTimeoutMs)) {
     Serial.print(F("Failed to connect to "));
     Serial.println(wifiSsid);
-    return;
+    return false;
   }
   Serial.println("Connected.");
 
@@ -172,33 +281,29 @@ void setup() {
     Serial.println(F("Query Failed."));
     client.close();
     wifi.disconnect();
-    return;
+    return false;
   }
 
   client.close();
   wifi.disconnect();
-
-}
-
-void loop() {
-  delay(1000);
+  return true;
 }
 
 /*
  * Query the moon phase web site,
  * setting the UTC date and the age of the moon.
- * 
+ *
  * This function is designed to read
  *   HM Nautical Almanac Office: Miscellanea.
  *   Daily Rise/set and Twilight times for the British Isles.
  */
 boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-    int *pIlluminatedPC) {
+              int *pIlluminatedPC) {
 
   Serial.print(F("Querying "));
   Serial.print(HttpServer);
   Serial.println(F(" ..."));
-  
+
   if (!client.connect(HttpServer, HttpPort)) {
     Serial.println(F("Connect to server failed."));
     return false;
@@ -209,7 +314,7 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
     Serial.println(F("No Date: in header"));
     return false;
   }
-  
+
   Serial.println(F("Found Date: "));
   Serial.print(F("days since Sunday: "));
   Serial.println(pDateTimeUTC->daySinceSunday);
@@ -234,7 +339,7 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
   if (*pDaysSinceNewMoon == DBL_MAX) {
     return false;
   }
-  
+
   Serial.print(F("Days since new moon: "));
   Serial.println(*pDaysSinceNewMoon);
 
@@ -252,7 +357,7 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
   Serial.println(*pIlluminatedPC);
 
   Serial.println(F("Query completed."));
-  
+
   return true;
 }
 
@@ -261,10 +366,10 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
  * then parses the date header, through the timezone.
  * The Timezone must be GMT
  * Return true if successful, false otherwise.
- * 
+ *
  * Example date header returned in the HTTP response from a web server:
  * Date: Fri, 21 Aug 2015 22:06:40 GMT
- * 
+ *
  * To use:
  *   Struct HttpDateTime dateTime;
  *   ...
@@ -281,7 +386,7 @@ boolean findDate(struct HttpDateTime *pDateTimeUTC) {
   pDateTimeUTC->hour = -1;
   pDateTimeUTC->minute = -1;
   pDateTimeUTC->second = -1;
- 
+
   if (!client.find("Date: ")) {
     // No Date header found in response.
     return false;
@@ -405,9 +510,9 @@ boolean findDate(struct HttpDateTime *pDateTimeUTC) {
     return false;  // garbled
   }
   pDateTimeUTC->year = (buf[0] - '0') * 1000
-    + (buf[1] - '0') * 100
-    + (buf[2] - '0') * 10
-    + (buf[3] - '0');
+                       + (buf[1] - '0') * 100
+                       + (buf[2] - '0') * 10
+                       + (buf[3] - '0');
 
   // Skip the space before the hour
   if (client.read() < 0) {
@@ -486,7 +591,7 @@ boolean findDate(struct HttpDateTime *pDateTimeUTC) {
  * the X character following the string "11.9"
  * Note: there must be at least one character following the number.
  * That is, the input mustn't end immediately after the number.
- * 
+ *
  * Accepts unsigned decimal numbers such as
  * 34
  * 15.
@@ -547,13 +652,13 @@ double readDouble() {
  */
 /*
  * Reads a string from EEPROM.  Copy this code into your program that reads EEPROM.
- * 
+ *
  * baseAddress = EEPROM address of the first byte in EEPROM to read from.
  * stringNumber = index of the string to retrieve (string 0, string 1, etc.)
- * 
+ *
  * Assumes EEPROM contains a list of null-terminated strings,
  * terminated by EEPROM_END_MARK.
- * 
+ *
  * Returns:
  * A pointer to a dynamically-allocated string read from EEPROM,
  * or null if no such string was found.
@@ -614,22 +719,22 @@ char *readEEPROMString(int baseAddress, int stringNumber) {
 // From http://www.avr-developers.com/mm/memoryusage.html
 //*	http://www.nongnu.org/avr-libc/user-manual/malloc.html
 //*	thanks to John O.
-void	Ram_TableDisplay(void) 
+void	Ram_TableDisplay(void)
 {
   char stack = 1;
-extern char *__data_start;
-extern char *__data_end;
-extern char *__bss_start;
-extern char *__bss_end;
-extern char *__heap_start;
-extern char *__heap_end;
+  extern char *__data_start;
+  extern char *__data_end;
+  extern char *__bss_start;
+  extern char *__bss_end;
+  extern char *__heap_start;
+  extern char *__heap_end;
 
   int	data_size	=	(int)&__data_end - (int)&__data_start;
   int	bss_size	=	(int)&__bss_end - (int)&__data_end;
   int	heap_end	=	(int)&stack - (int)&__malloc_margin;
   int	heap_size	=	heap_end - (int)&__bss_end;
   int	stack_size	=	RAMEND - (int)&stack + 1;
-  int	available	=	(RAMEND - (int)&__data_start + 1);	
+  int	available	=	(RAMEND - (int)&__data_start + 1);
   available	-=	data_size + bss_size + heap_size + stack_size;
 
   Serial.println();
@@ -650,16 +755,17 @@ extern char *__heap_end;
 }
 int get_free_memory()
 {
-extern char __bss_end;
-extern char *__brkval;
+  extern char __bss_end;
+  extern char *__brkval;
 
   int free_memory;
 
-  if((int)__brkval == 0)
+  if ((int)__brkval == 0)
     free_memory = ((int)&free_memory) - ((int)&__bss_end);
   else
     free_memory = ((int)&free_memory) - ((int)__brkval);
 
   return free_memory;
 }
+
 
