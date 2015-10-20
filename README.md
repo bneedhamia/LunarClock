@@ -20,3 +20,11 @@ defined and partially implemented.
 
 Next steps: replace the obsolete stepper motor; try an opto-interruptor to initialize
 the wheel location; start sketching the to-be-laser-cut wheel and other parts.
+
+## Files
+* LunarClock.ino = the Arduino Sketch
+* BillOfMaterials.ods = the parts list
+* LunarClockDiary.odt = my project diary.  All of the little details of the path from idea to reality (so far)
+* LICENSE = the project GPL2 license file
+* README.md = this file
+* XXXXX to add as I create them: fritzing diagram; mechanical notes; files for laser cutting.
