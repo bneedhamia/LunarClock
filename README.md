@@ -24,6 +24,7 @@ the wheel location; start sketching the to-be-laser-cut wheel and other parts.
 ## Files
 * LunarClock.ino = the Arduino Sketch
 * BillOfMaterials.ods = the parts list
+* LunarWheel.svg = Inkscape (laser cutting) file for the wheel of lunar images.
 * LunarClockDiary.odt = my project diary.  All of the little details of the path from idea to reality (so far)
 * LICENSE = the project GPL2 license file
 * README.md = this file
