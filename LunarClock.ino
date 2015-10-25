@@ -60,6 +60,8 @@
  * 
  * PIN_LED_YELLOW = HIGH to light the yellow LED.
  *
+ * PIN_OPTO_LIGHT = signal from the opto-interruptor.  HIGH = slot is unobstructed.
+ *   That is, part of the lunar wheel slot is in front of the opto-interrupter.
  * XXX more to come.
  *
  * Pins 10-13 are the Mega SPI bus.
@@ -76,6 +78,8 @@ const int PIN_STEP_YELLOW = 24;
 const int PIN_STEP_BLUE = 22;
 
 const int PIN_LED_YELLOW = 30;
+
+const int PIN_OPTO_LIGHT = 32;
 
 /*
  * The EEPROM layout, starting at START_ADDRESS, is:
@@ -134,6 +138,38 @@ const int STEPS_PER_REVOLUTION = 2046; // = 360 / (7.5/85.25 * 2.0)
 const int STEPPER_RPM = 7;
 
 /*
+ * Because there may be noise as the edge of the slot appears
+ * in front of the opto-interrupter, we start turning the stepper motor,
+ * and we expect to see the opto-interrupter dark for
+ * at least MIN_DARK_STEPS contiguous steps (to get past the end of the slot)
+ * before we start looking for the slot.
+ * 
+ * STEPS_SLOT_TO_MOON = the number of steps between the detected start of the slot
+ * and the proper alignment of a lunar image in the clock's window.
+ * That is, how much to move after finding the slot.
+ * 
+ * NUM_MOON_IMAGES = the number of lunar images in the wheel.
+ * We assume the images evenly divide one mean synodic month (new moon to new moon),
+ * rather than, for example, some image being 4 days long while another is 6 days long.
+ * 
+ * DAYS_PER_IMAGE = the number of days corresponding to each lunar image.
+ *   29.53059 is the length in days of the mean synodic month
+ * STEPS_PER_IMAGE = the number of steps to move from one image to the next.
+ *   Note: we keep current angle and steps per image in floating point
+ *   because NUM_MOON_IMAGES likely doesn't evenly divide STEPS_PER_REVOLUTION,
+ *   which would result in the image alignment drifting significantly over a few months.
+ *   
+ * INITIAL_IMAGE_ANGLE_STEPS = the number of steps from the center of the new moon image
+ *   to the initial image.  That is, the initial angle of the wheel relative to the new moon.
+ */
+const int MIN_DARK_STEPS = STEPS_PER_REVOLUTION / (360 / 5); // 5 degrees
+const int STEPS_SLOT_TO_MOON = 114; //XXX need to calibrate this when the clock is finished.
+const int NUM_MOON_IMAGES = 8;
+const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
+const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
+const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to change this when the mech. design is done.
+
+/*
  * Stepper motor pin sequence.
  *
  * Motor documentation at http://www.kysanelectronics.com/graphics/1139001-1.pdf
@@ -154,8 +190,6 @@ Stepper stepper(STEPS_PER_REVOLUTION,
     //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK);  // weak/nothing
     //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW);  //nothing. odd should be cw.
 
-//XXX remember to initialize the motor by moving until it gets to a known spot.
-
 // WiFi and WiFi Client control objects.
 SFE_CC3000 wifi = SFE_CC3000(PIN_WIFI_INT, PIN_WIFI_ENABLE, PIN_SELECT_WIFI);
 SFE_CC3000_Client client = SFE_CC3000_Client(wifi);
@@ -169,6 +203,15 @@ struct HttpDateTime dateTimeUTC;
 
 double daysSinceNewMoon;  // number of days (0.0 .. 29.53) since the New Moon.
 int illuminatedPC;       // percent (0..100) of the moon's surface that's illuminated.
+
+/*
+ * curentAngleSteps = the current position of the wheel, in (fractional) steps
+ * from the center of the new moon.
+ * 
+ * A floating-point number to avoid accumulating errors in dividing a revolution by the number of images,
+ * which would cause the images to drift out of place after a few months of constant running.
+ */
+double currentAngleSteps;
 
 /*
  * The site to query:
@@ -214,14 +257,17 @@ const byte STATE_WAITING      = 4;
 const byte STATE_DONE         = 5;
 byte state;
 
+boolean findWheelSlot();
 boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
               int *pIlluminatedPC);
+boolean turnWheelToPhase(double daysSinceNewMoon);
 
 void setup() {
   Serial.begin(9600);
 
   pinMode(PIN_LED_YELLOW, OUTPUT);
   digitalWrite(PIN_LED_YELLOW, LOW);
+  pinMode(PIN_OPTO_LIGHT, INPUT);
 
   Serial.println(F("Reset."));
 
@@ -271,18 +317,12 @@ void loop() {
     break;
 
   case STATE_FIND_SLOT:  // rotate the wheel to the slot, so we know the wheel position.
-
-    //XXX decide how to reliably find one or the other edge of the slot.
-    // Turn up to 1.5 revolutions to find the slot in the wheel.
-    for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 2); ++i) {
-      stepper.step(1);
-      //XXX check the opto-interruptor here.
+    if (!findWheelSlot()) {
+      state = STATE_ERROR;
+      break;
     }
 
-    // If we didn't find the slot, that's an unrecoverable error.
-    //XXX do it.
-
-    // The wheel is zeroed.  Find the date and phase of the moon.
+    // The wheel is in its initial position.  Find the date and phase of the moon.
     state = STATE_WEB_QUERY;
     break;
 
@@ -298,6 +338,11 @@ void loop() {
     break;
 
   case STATE_TURN_WHEEL:  // turn the wheel to the current phase of the moon
+    if (!turnWheelToPhase(daysSinceNewMoon)) {
+      state = STATE_ERROR;
+      break;
+    }
+    
     state = STATE_ERROR; //XXX for now.
     break;
 
@@ -316,6 +361,100 @@ void loop() {
     state = STATE_ERROR;
   }
 
+}
+
+/*
+ * Turns the stepper motor until the slot appears in front of the opto-interrupter.
+ * We need to do this on Reset to move the wheel to a known position.
+ * 
+ * In case we're already somewhere in the slot,
+ * we wait for MIN_DARK_STEPS contiguous steps outside the slot
+ * before we start looking for the beginning of the slot.
+ */
+boolean findWheelSlot() {
+  boolean seenMinDark = false;
+  int count = 0;
+  int i;
+    
+  // Turn up to 1.5 revolutions to find the slot in the wheel.
+  for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 2); ++i) {
+    stepper.step(1);
+
+    if (!seenMinDark) {
+      if (digitalRead(PIN_OPTO_LIGHT) == HIGH) {
+        continue; // light
+      }
+      ++count;
+      if (count < MIN_DARK_STEPS) {
+        continue;
+      }
+
+      // Seen MIN_DARK_STEPS - we're now clearly outside the slot.
+      seenMinDark = true;
+      count = 0;
+    } else {
+      // Searching for the slot.
+      if (digitalRead(PIN_OPTO_LIGHT) == LOW) {
+        continue; // still dark
+      }
+      ++count;
+      break; // we're done.
+    }
+  }
+  if (!seenMinDark || count == 0) {
+    Serial.println(F("Slot not found."));
+    return false;
+  }
+
+  /*
+   * We are positioned at the slot.
+   * Move forward to get to align a lunar image in the window.
+   * Note which lunar image that is.
+   */
+
+  stepper.step(STEPS_SLOT_TO_MOON);
+  currentAngleSteps = INITIAL_IMAGE_ANGLE_STEPS;
+
+  return true;
+}
+
+/*
+ * Turns the lunar images wheel to show the phase of the moon
+ * corresponding to the given age of the moon.
+ * 
+ * Returns true if successful; false otherwise.
+ */
+boolean turnWheelToPhase(double daysSinceNewMoon) {
+  int desiredIndex = 0;  // index of the lunar image we want to display; new moon = 0.
+  double desiredAngleSteps = 0.0; // desired position of the wheel, in fractional steps from the new moon.
+  int stepsToMove = 0;   // number of steps required to turn to the desired angle.
+
+  // Find which image we want to move to.
+  desiredIndex = (int) ((daysSinceNewMoon + (DAYS_PER_IMAGE / 2)) / DAYS_PER_IMAGE);
+  if (desiredIndex < 0) {
+    Serial.print("Calculated Index < 0: ");
+    Serial.println(desiredIndex);
+    return false;
+  }
+  if (desiredIndex > NUM_MOON_IMAGES - 1) {  // Needed because floating point numbers aren't exact.
+    desiredIndex = NUM_MOON_IMAGES - 1;
+  }
+  
+  Serial.print(F("Moving to image "));
+  Serial.println(desiredIndex);
+
+  desiredAngleSteps = desiredIndex * STEPS_PER_IMAGE;
+  stepsToMove = (int) (desiredAngleSteps - currentAngleSteps + 0.5);
+  while (stepsToMove < 0) {
+    stepsToMove += STEPS_PER_REVOLUTION;
+  }
+
+  stepper.step(stepsToMove);
+
+  // Update the position of the wheel relative to the new moon.
+  currentAngleSteps += desiredAngleSteps;
+
+  return true;
 }
 
 /*

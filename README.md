@@ -16,10 +16,11 @@ NOTE: This is a work in progress. I'm currently developing it.
 State: it turns an (obsolete) stepper motor using the Stepper Arduino library;
 it reads HM Almanac page to read the date/time (UTC), the current age of the moon in days,
 and percent of its face that is illuminated; the state machine to run the whole thing is
-defined and partially implemented.
+defined and partially implemented. The code to position the wheel based on the opto-interrupter is in place,
+and is awaiting the mechanical design.
 
-Next steps: replace the obsolete stepper motor; try an opto-interruptor to initialize
-the wheel location; start sketching the to-be-laser-cut wheel and other parts.
+Next steps: replace the obsolete stepper motor;
+start sketching the rest of the to-be-laser-cut mechanical parts.
 
 ## Files
 * LunarClock.ino = the Arduino Sketch
