@@ -120,7 +120,7 @@ double readDouble();
  * 
  * The datasheet specifies a step angle of 7.5/85.25 degrees.
  * It's specified that way because the stepper has a 1/85.25 gear ratio.
- * But that specifies half-stepping, and the Stepper library does full stepping,
+ * But that number is based on half-stepping, and the Stepper library does full stepping,
  * so the effective step angle is double the specified one
  * = 7.5 / 85.25 * 2
  *
@@ -170,7 +170,6 @@ struct HttpDateTime dateTimeUTC;
 double daysSinceNewMoon;  // number of days (0.0 .. 29.53) since the New Moon.
 int illuminatedPC;       // percent (0..100) of the moon's surface that's illuminated.
 
-
 /*
  * The site to query:
  *   HM Nautical Almanac Office: Miscellanea.
@@ -197,7 +196,7 @@ const String HttpRequest = "GET /nao/miscellanea/birs2.html HTTP/1.0\n"
 /*
  * Our state machine, that keeps track of what to do next.
  * 
- * STATE_ERROR = Startup encountered and unrecoverable error.
+ * STATE_ERROR = encountered and unrecoverable error. Do nothing more.
  * STATE_FIND_SLOT = search for the slot that tells us the wheel position.
  * STATE_WEB_QUERY = query the web site to find the time and moon phase.
  * STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
