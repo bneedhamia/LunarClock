@@ -118,24 +118,19 @@ double readDouble();
 
 /*
  * Speed (Revolutions per minute) to run the stepper motor.
- * The stepper documentation below seems to say 2ms is the minimum per step.
- * Experimentation shows with half-stepping 4ms is good; 10 is strong & slow; 2 is fast & weak.
- * With full-stepping, the longer time doesn't seem to make a difference in torque.
+ * The stepper documentation 
  * 
- * The datasheet specifies a step angle of 7.5/85.25 degrees.
- * It's specified that way because the stepper has a 1/85.25 gear ratio.
- * But that number is based on half-stepping, and the Stepper library does full stepping,
- * so the effective step angle is double the specified one
- * = 7.5 / 85.25 * 2
+ * The Adafruit page for the 28BYJ-28 12V motor lists 32 * 16.025 steps per revolution,
+ * or 512.8. The Adafruit example uses 513 steps per revolution, so let's use that.
  *
  * Putting this into the stepper library's RPM measure:
  * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
  * mS/minute   / steps per revolution / mS per step =
- * (1000 * 60) / 2046                 / 4 = 7.33 rpm (round down to 7 rpm)
+ * (1000 * 60) / 2046                 / 4 = 7.33 rpm (round down to 7 rpm) XXX old numbers.
  *
  */
-const int STEPS_PER_REVOLUTION = 2046; // = 360 / (7.5/85.25 * 2.0)
-const int STEPPER_RPM = 7;
+const int STEPS_PER_REVOLUTION = 513;
+const int STEPPER_RPM = 5; // the Adafruit docs suggest 5rpm.
 
 /*
  * Because there may be noise as the edge of the slot appears
@@ -170,7 +165,7 @@ const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES
 const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to change this when the mech. design is done.
 
 /*
- * Stepper motor pin sequence.
+ * Stepper motor pin sequence.XXX update these notes for the right motor.
  *
  * Motor documentation at http://www.kysanelectronics.com/graphics/1139001-1.pdf
  * gives an order of
@@ -183,12 +178,12 @@ const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to cha
  * one caused counterclockwise rotation, and its reverse caused counterclockwise rotation.
  */
 Stepper stepper(STEPS_PER_REVOLUTION,
-    PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE);    // Clockwise
-    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_ORANGE, PIN_STEP_PINK);  // weak CCW
-    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_YELLOW, PIN_STEP_ORANGE);  // nothing
-    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_ORANGE, PIN_STEP_YELLOW);  //nothing
-    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK);  // weak/nothing
-    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW);  //nothing. odd should be cw.
+    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE);    // weak clockwise
+    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_ORANGE, PIN_STEP_PINK);    // weak clockwise
+    PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_YELLOW, PIN_STEP_ORANGE);  // strong clockwise
+    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_ORANGE, PIN_STEP_YELLOW);  // strong counterclockwise
+    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK);  // weak CCW
+    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW);  // weaak CCW
 
 // WiFi and WiFi Client control objects.
 SFE_CC3000 wifi = SFE_CC3000(PIN_WIFI_INT, PIN_WIFI_ENABLE, PIN_SELECT_WIFI);
