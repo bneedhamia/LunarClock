@@ -21,8 +21,8 @@
  * (https://www.sparkfun.com/products/11469),
  * a Sparkfun CC3000 WiFi Shield on top of that
  * (https://www.sparkfun.com/products/12071),
- * a 30BYJ02AH unipolar stepper motor  XXX to be replaced with one that's in stock
- * (Datasheet at http://www.kysanelectronics.com/Products/datasheet_display.php?recordID=1750)
+ * a 28BYJ-48 12V unipolar stepper motor
+ * (Datasheet at http://www.emartee.com/product/41757/)
  * controlled by a set of discrete parts (TIP120s),
  * an opto-interrupter for aligning the image of the moon.
  * XXX and more parts.
@@ -37,7 +37,7 @@
 #include <SFE_CC3000.h>
 #include <SFE_CC3000_Client.h>
 #include <EEPROM.h>
-#include <Stepper.h>
+#include <Stepper.h> //XXX ditch the stepper library, because it burns power while not turning. Use your own code.
 
 /*
  * Pins:
@@ -51,8 +51,8 @@
  * Pins controlling the stepper motor.
  * These pins control the Base voltages of each
  * of the 4 non-common wires of the stepper motor.
- * Active High.  That is, a HIGH value sends current
- * through the corresponding wire and coil.
+ * Active High.  That is, a HIGH value grounds the
+ * corresponding wire and coil, energizing that coil.
  * PIN_STEP_ORANGE
  * PIN_STEP_YELLOW
  * PIN_STEP_PINK
@@ -62,6 +62,7 @@
  *
  * PIN_OPTO_LIGHT = signal from the opto-interruptor.  HIGH = slot is unobstructed.
  *   That is, part of the lunar wheel slot is in front of the opto-interrupter.
+ *   
  * XXX more to come.
  *
  * Pins 10-13 are the Mega SPI bus.
@@ -120,8 +121,8 @@ double readDouble();
  * Speed (Revolutions per minute) to run the stepper motor.
  * The stepper documentation 
  * 
- * The Adafruit page for the 28BYJ-28 12V motor lists 32 * 16.025 steps per revolution,
- * or 512.8. The Adafruit example uses 513 steps per revolution, so let's use that.
+ * The datasheet above for the 28BYJ-48 12V motor lists a step angle of 5.625 / 64 degrees.
+ * or 360 / 5.625 * 64 = 4096.
  *
  * Putting this into the stepper library's RPM measure:
  * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
@@ -129,7 +130,7 @@ double readDouble();
  * (1000 * 60) / 2046                 / 4 = 7.33 rpm (round down to 7 rpm) XXX old numbers.
  *
  */
-const int STEPS_PER_REVOLUTION = 513;
+const int STEPS_PER_REVOLUTION = 4096;
 const int STEPPER_RPM = 5; // the Adafruit docs suggest 5rpm.
 
 /*
@@ -167,15 +168,10 @@ const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to cha
 /*
  * Stepper motor pin sequence.XXX update these notes for the right motor.
  *
- * Motor documentation at http://www.kysanelectronics.com/graphics/1139001-1.pdf
- * gives an order of
- * ORG->PIN (pink) -> YEL -> BLU for counterclockwise (from shaft side) rotation.
- * The reverse of that sequence is clockwise.
  * The datasheet shows half-stepping, which the Arduino Stepper library doesn't do.
  *
  * I tested the datasheet's sequence by trying the 6 permutations
- * of pin sequences that begin with pinO. Only two caused any rotation at all:
- * one caused counterclockwise rotation, and its reverse caused counterclockwise rotation.
+ * of pin sequences that begin with the Blue pin.
  */
 Stepper stepper(STEPS_PER_REVOLUTION,
     //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE);    // weak clockwise
