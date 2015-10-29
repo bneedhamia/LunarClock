@@ -26,6 +26,7 @@
  * controlled by a set of discrete parts (TIP120s),
  * an opto-interrupter for aligning the image of the moon.
  * XXX and more parts.
+ * See BillOfMaterials.ods for all the parts.
  *
  * The Transmogrishield is needed because the SPI pins
  * are different on the Arduino Mega than the Uno.
@@ -65,7 +66,7 @@
  *   
  * XXX more to come.
  *
- * Pins 10-13 are the Mega SPI bus.
+ * Pins 10-13 are the Arduino Mega SPI bus.
  * Note: that means that the normal pin 13 LED is not usable as an LED.
  */
 const int PIN_WIFI_INT = 2;
@@ -119,24 +120,27 @@ double readDouble();
 
 /*
  * Speed (Revolutions per minute) to run the stepper motor.
- * The stepper documentation 
- * 
- * The datasheet above for the 28BYJ-48 12V motor lists a step angle of 5.625 / 64 degrees.
- * or 360 / 5.625 * 64 = 4096.
  *
+ * The Adafruit datasheet for the 28BYJ-48 12V motor  at http://www.adafruit.com/products/918
+ * lists 32 steps per revolution with a further gear ration of 16.025
+ * which gives 32 * 16.025 = 512.8 steps per revolution.
+ * Rounding to 513 would produce an error of +0.2 steps per revolution
+ * (that is, one of our revolutions is 0.2 steps larger than the real one).
+ *
+ *XXX update this.
  * Putting this into the stepper library's RPM measure:
  * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
  * mS/minute   / steps per revolution / mS per step =
- * (1000 * 60) / 2046                 / 4 = 7.33 rpm (round down to 7 rpm) XXX old numbers.
+ * (1000 * 60) / 512.8                / 4 = 7.33 rpm (round down to 7 rpm) XXX old numbers.
  *
  */
-const int STEPS_PER_REVOLUTION = 4096;
-const int STEPPER_RPM = 5; // the Adafruit docs suggest 5rpm.
+const int STEPS_PER_REVOLUTION = 513;
+const int STEPPER_RPM = 15; // the Adafruit docs suggest 5rpm, with a max at about 50rpm
 
 /*
- * Because there may be noise as the edge of the slot appears
+ * Because there may be noise (uncertainty) as the edge of the slot appears
  * in front of the opto-interrupter, we start turning the stepper motor,
- * and we expect to see the opto-interrupter dark for
+ * then we expect to see the opto-interrupter dark for
  * at least MIN_DARK_STEPS contiguous steps (to get past the end of the slot)
  * before we start looking for the slot.
  * 
@@ -166,7 +170,7 @@ const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES
 const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to change this when the mech. design is done.
 
 /*
- * Stepper motor pin sequence.XXX update these notes for the right motor.
+ * Stepper motor pin sequence.
  *
  * The datasheet shows half-stepping, which the Arduino Stepper library doesn't do.
  *
@@ -368,7 +372,7 @@ boolean findWheelSlot() {
   int i;
     
   // Turn up to 1.5 revolutions to find the slot in the wheel.
-  for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 2); ++i) {
+  for (i = 0; i < STEPS_PER_REVOLUTION /*XXX just one for now + (STEPS_PER_REVOLUTION / 2)*/; ++i) {
     stepper.step(1);
 
     if (!seenMinDark) {
