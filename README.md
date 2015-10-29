@@ -13,13 +13,13 @@ a Sparkfun CC3000 WiFi Shield, and an obsolete stepper motor.  Details are in th
 
 NOTE: This is a work in progress. I'm currently developing it.
 
-State: it turns an (obsolete) stepper motor using the Stepper Arduino library;
+State: it turns an AdaFruit 28BYJ-48 12V stepper motor using the Stepper Arduino library;
 it reads HM Almanac page to read the date/time (UTC), the current age of the moon in days,
 and percent of its face that is illuminated; the state machine to run the whole thing is
 defined and partially implemented. The code to position the wheel based on the opto-interrupter is in place,
 and is awaiting the mechanical design.
 
-Next steps: replace the obsolete stepper motor;
+Next steps: replace the Arduino Stepper library with my own code, that shuts off the motor when not in use.
 start sketching the rest of the to-be-laser-cut mechanical parts.
 
 ## Files
