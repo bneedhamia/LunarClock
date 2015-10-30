@@ -26,6 +26,7 @@
  * controlled by a set of discrete parts (TIP120s),
  * an opto-interrupter for aligning the image of the moon.
  * XXX and more parts.
+ * 
  * See BillOfMaterials.ods for all the parts.
  *
  * The Transmogrishield is needed because the SPI pins
@@ -38,7 +39,6 @@
 #include <SFE_CC3000.h>
 #include <SFE_CC3000_Client.h>
 #include <EEPROM.h>
-#include <Stepper.h> //XXX ditch the stepper library, because it burns power while not turning. Use your own code.
 
 /*
  * Pins:
@@ -47,12 +47,14 @@
  * PIN_WIFI_INT = interrupt pin for Wifi Shield
  * PIN_WIFI_ENABLE = enable pin for with Wifi Shield
  * PIN_SELECT_WIFI = the CC3000 chip select pin.
- * PIN_SELECT_SD = the SD chip select pin (currently unused)
+ * PIN_SELECT_SD = the SD card chip select pin (currently unused)
  *
  * Pins controlling the stepper motor.
  * These pins control the Base voltages of each
  * of the 4 non-common wires of the stepper motor.
- * Active High.  That is, a HIGH value grounds the
+ * The 5th pin (Red) is connected to Vin.
+ * 
+ * These pins are Active High.  That is, a HIGH value grounds the
  * corresponding wire and coil, energizing that coil.
  * PIN_STEP_ORANGE
  * PIN_STEP_YELLOW
@@ -61,10 +63,8 @@
  * 
  * PIN_LED_YELLOW = HIGH to light the yellow LED.
  *
- * PIN_OPTO_LIGHT = signal from the opto-interruptor.  HIGH = slot is unobstructed.
+ * PIN_OPTO_LIGHT = input from the opto-interruptor.  HIGH = slot is unobstructed.
  *   That is, part of the lunar wheel slot is in front of the opto-interrupter.
- *   
- * XXX more to come.
  *
  * Pins 10-13 are the Arduino Mega SPI bus.
  * Note: that means that the normal pin 13 LED is not usable as an LED.
@@ -119,23 +119,47 @@ boolean findDate(struct HttpDateTime *pDateTimeUTC);
 double readDouble();
 
 /*
- * Speed (Revolutions per minute) to run the stepper motor.
- *
+ * 28BYJ-48 12V Stepper motor sequence.
+ * 
+ * SEQUENCE_STEPS = number of values in sequence[].
+ * sequence[] = the sequence of pin activation for clockwise rotation of the stepper motor.
+ * curSeq = the current index into sequence[] corresponding to the state of the motor.
+ *   Note: on reset, we don't know the state of the motor, but it doesn't matter
+ *   because we'll rotate the motor to a known location (the slot).
+ *   
+ * The commented-out sequences are the other 5 possible sequences of the 4 pins.
+ */
+const int SEQUENCE_STEPS = 4;
+const int sequence[SEQUENCE_STEPS] =
+    {PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE};    // strong clockwise
+    //{PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_ORANGE, PIN_STEP_PINK};    // quiver (no movement)
+    //{PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_YELLOW, PIN_STEP_ORANGE};    // quiver
+    //{PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_ORANGE, PIN_STEP_YELLOW};    // quiver
+    //{PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK};    // quiver
+    //{PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW};    // strong counterclockwise
+int curSeq;
+
+/*
+ * STEPS_PER_REVOLUTION = the number of (integer) steps in a revolution.
  * The Adafruit datasheet for the 28BYJ-48 12V motor  at http://www.adafruit.com/products/918
  * lists 32 steps per revolution with a further gear ration of 16.025
  * which gives 32 * 16.025 = 512.8 steps per revolution.
  * Rounding to 513 would produce an error of +0.2 steps per revolution
  * (that is, one of our revolutions is 0.2 steps larger than the real one).
- *
- *XXX update this.
- * Putting this into the stepper library's RPM measure:
- * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
- * mS/minute   / steps per revolution / mS per step =
- * (1000 * 60) / 512.8                / 4 = 7.33 rpm (round down to 7 rpm) XXX old numbers.
- *
  */
 const int STEPS_PER_REVOLUTION = 513;
-const int STEPPER_RPM = 15; // the Adafruit docs suggest 5rpm, with a max at about 50rpm
+
+/*
+ * Width (milliseconds) of each (half) step in the stepper motor sequence.
+ * Experimentation shows 4ms is good; 10 is strong & slow; 2 is fast & weak.
+ * 
+ * Calculating RPM from PULSE_WIDTH_MS:
+ * mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
+ * mS/minute   / steps per revolution / (2 * PULSE_WIDTH_MS) =
+ * (1000 * 60) / 512.8                / 20 = about 5.8 RPM
+ * Experimentally, one revolution took about 10 seconds, which would be 6 rpm.  So this looks right.
+ */
+const int PULSE_WIDTH_MS = 10;
 
 /*
  * Because there may be noise (uncertainty) as the edge of the slot appears
@@ -170,20 +194,15 @@ const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES
 const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to change this when the mech. design is done.
 
 /*
- * Stepper motor pin sequence.
- *
- * The datasheet shows half-stepping, which the Arduino Stepper library doesn't do.
- *
- * I tested the datasheet's sequence by trying the 6 permutations
- * of pin sequences that begin with the Blue pin.
+ * curentAngleSteps = the current position of the wheel, in (fractional) steps
+ * from the center of the new moon.
+ * 
+ * A floating-point number to avoid accumulating errors
+ * in dividing a revolution by the number of images,
+ * which would cause the images to drift out of place
+ * after a few months of constant running.
  */
-Stepper stepper(STEPS_PER_REVOLUTION,
-    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_PINK, PIN_STEP_ORANGE);    // weak clockwise
-    //PIN_STEP_BLUE, PIN_STEP_YELLOW, PIN_STEP_ORANGE, PIN_STEP_PINK);    // weak clockwise
-    PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_YELLOW, PIN_STEP_ORANGE);  // strong clockwise
-    //PIN_STEP_BLUE, PIN_STEP_PINK, PIN_STEP_ORANGE, PIN_STEP_YELLOW);  // strong counterclockwise
-    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK);  // weak CCW
-    //PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW);  // weaak CCW
+double currentAngleSteps;
 
 // WiFi and WiFi Client control objects.
 SFE_CC3000 wifi = SFE_CC3000(PIN_WIFI_INT, PIN_WIFI_ENABLE, PIN_SELECT_WIFI);
@@ -197,16 +216,7 @@ SFE_CC3000_Client client = SFE_CC3000_Client(wifi);
 struct HttpDateTime dateTimeUTC;
 
 double daysSinceNewMoon;  // number of days (0.0 .. 29.53) since the New Moon.
-int illuminatedPC;       // percent (0..100) of the moon's surface that's illuminated.
-
-/*
- * curentAngleSteps = the current position of the wheel, in (fractional) steps
- * from the center of the new moon.
- * 
- * A floating-point number to avoid accumulating errors in dividing a revolution by the number of images,
- * which would cause the images to drift out of place after a few months of constant running.
- */
-double currentAngleSteps;
+int illuminatedPC;       // percent (0..100) of the moon's surface that's illuminated (unused).
 
 /*
  * The site to query:
@@ -260,10 +270,22 @@ boolean turnWheelToPhase(double daysSinceNewMoon);
 void setup() {
   Serial.begin(9600);
 
+  // Set up all our pins.
+  
   pinMode(PIN_LED_YELLOW, OUTPUT);
   digitalWrite(PIN_LED_YELLOW, LOW);
+  
   pinMode(PIN_OPTO_LIGHT, INPUT);
 
+  pinMode(PIN_STEP_ORANGE, OUTPUT);
+  digitalWrite(PIN_STEP_ORANGE, LOW);
+  pinMode(PIN_STEP_PINK, OUTPUT);
+  digitalWrite(PIN_STEP_PINK, LOW);
+  pinMode(PIN_STEP_YELLOW, OUTPUT);
+  digitalWrite(PIN_STEP_YELLOW, LOW);
+  pinMode(PIN_STEP_BLUE, OUTPUT);
+  digitalWrite(PIN_STEP_BLUE, LOW);
+  
   Serial.println(F("Reset."));
 
   state = STATE_ERROR; 
@@ -277,22 +299,26 @@ void setup() {
     return;
   }
 
-  stepper.setSpeed(STEPPER_RPM);
-
-  // Give the developer a chance to start the Serial Monitor
-  // before setting up the WiFi
+  /*
+   * Give the developer a chance to start the Serial Monitor
+   * before we start up the WiFi.
+   * We do this because some WiFi boards seem to get upset
+   * if they are reset in the middle of trying to connect.
+   */
   delay(5000);
 
   Serial.println(F("Starting..."));
 
-  // Setup the WiFi shield
   if (!wifi.init()) {
     Serial.println(F("wifi.init() failed."));
     state = STATE_ERROR;
     return;
   }
 
-  // initialization is complete.
+  /*
+   * initialization is complete.
+   * Next, we rotate the lunar wheel to a known starting place.
+   */
   state = STATE_FIND_SLOT;
 }
 
@@ -371,9 +397,9 @@ boolean findWheelSlot() {
   int count = 0;
   int i;
     
-  // Turn up to 1.5 revolutions to find the slot in the wheel.
-  for (i = 0; i < STEPS_PER_REVOLUTION /*XXX just one for now + (STEPS_PER_REVOLUTION / 2)*/; ++i) {
-    stepper.step(1);
+  // Turn up to 1 and 1/4 revolutions to find the slot in the wheel.
+  for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 4); ++i) {
+    step(1);
 
     if (!seenMinDark) {
       if (digitalRead(PIN_OPTO_LIGHT) == HIGH) {
@@ -404,10 +430,10 @@ boolean findWheelSlot() {
   /*
    * We are positioned at the slot.
    * Move forward to get to align a lunar image in the window.
-   * Note which lunar image that is.
+   * Note where the wheel is relative to the new moon.
    */
 
-  stepper.step(STEPS_SLOT_TO_MOON);
+  step(STEPS_SLOT_TO_MOON);
   currentAngleSteps = INITIAL_IMAGE_ANGLE_STEPS;
 
   return true;
@@ -424,9 +450,10 @@ boolean turnWheelToPhase(double daysSinceNewMoon) {
   double desiredAngleSteps = 0.0; // desired position of the wheel, in fractional steps from the new moon.
   int stepsToMove = 0;   // number of steps required to turn to the desired angle.
 
-  // Find which image we want to move to.
+  // Find which image we want to move to (rounded to an integer).
   desiredIndex = (int) ((daysSinceNewMoon + (DAYS_PER_IMAGE / 2)) / DAYS_PER_IMAGE);
   if (desiredIndex < 0) {
+    // Error.
     Serial.print("Calculated Index < 0: ");
     Serial.println(desiredIndex);
     return false;
@@ -444,7 +471,7 @@ boolean turnWheelToPhase(double daysSinceNewMoon) {
     stepsToMove += STEPS_PER_REVOLUTION;
   }
 
-  stepper.step(stepsToMove);
+  step(stepsToMove);
 
   // Update the position of the wheel relative to the new moon.
   currentAngleSteps += desiredAngleSteps;
@@ -842,6 +869,56 @@ double readDouble() {
   }
 
   return result;
+}
+
+/*
+ * Move the given number of whole steps clockwise.
+ * steps = number of steps to move. positive is clockwise; negative is counterclockwise.
+ * Note: steps can't be larger than +/-32767
+ */
+void step(int steps) {
+  int nextIdx;
+  int number;  // positive number of steps to perform.
+  
+  if (steps >= 0) {
+    number = steps;
+  } else {
+    number = -steps;
+  }
+  
+  for (int i = 0; i < number; ++i) {
+    
+    // find the next index into sequence[], based on the direction
+    if (steps >= 0) {
+      nextIdx = curSeq + 1;
+      if (nextIdx >= SEQUENCE_STEPS) {
+        nextIdx = 0;
+      }
+    } else {
+      nextIdx = curSeq - 1;
+      if (nextIdx < 0) {
+        nextIdx = SEQUENCE_STEPS - 1;
+      }
+    }
+    
+    /*
+     * Perform the step:
+     * 1) activate the current and next coils (1/2 step).
+     * 2) give the motor time to turn
+     * 3) activate just the next coil (another 1/2 step).
+     * 4) give the motor time to turn
+     * 5) turn everything off so we don't waste power.
+     */
+    
+    digitalWrite(sequence[curSeq], HIGH);
+    digitalWrite(sequence[nextIdx], HIGH);
+    delay(PULSE_WIDTH_MS);
+    digitalWrite(sequence[curSeq], LOW);
+    delay(PULSE_WIDTH_MS);
+    digitalWrite(sequence[nextIdx], LOW);
+    
+    curSeq = nextIdx;
+  }
 }
 
 /********************************
