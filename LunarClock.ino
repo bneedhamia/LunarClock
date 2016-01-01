@@ -187,11 +187,11 @@ const int PULSE_WIDTH_MS = 10;
  *   to the initial image.  That is, the initial angle of the wheel relative to the new moon.
  */
 const int MIN_DARK_STEPS = STEPS_PER_REVOLUTION / (360 / 5); // 5 degrees
-const int STEPS_SLOT_TO_MOON = 114; //XXX need to calibrate this when the clock is finished.
 const int NUM_MOON_IMAGES = 8;
 const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
 const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
-const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 6;  //XXX need to change this when the mech. design is done.
+const int STEPS_SLOT_TO_MOON = 33; //XXX need to calibrate this when the clock is finished.
+const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7;  //XXX need to change this when the mech. design is done.
 
 /*
  * curentAngleSteps = the current position of the wheel, in (fractional) steps
