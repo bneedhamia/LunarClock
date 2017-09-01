@@ -11,7 +11,7 @@ the percentage of its face that is illuminated.
 The current Sketch requires an Arduino Mega, a Sparkfun Transmogrishield,
 a Sparkfun CC3000 WiFi Shield, and an AdaFruit 28BYJ-48 12V.  Details are in the code.
 
-NOTE: This is a work in progress. I'm currently developing it.
+NOTE: This is a work in progress. I'm currently developing it. Actually, it's sort of stalled, awaiting inspiration. I definitely need to replace the Arduino boards with a single ESP8266-based board.
 
 State: it turns an AdaFruit 28BYJ-48 12V stepper motor in half-step mode;
 it reads HM Almanac page to read the date/time (UTC), the current age of the moon in days,
