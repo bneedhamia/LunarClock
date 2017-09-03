@@ -75,7 +75,7 @@ const int PIN_STEP_BLUE = 0;
 
 const int PIN_LED = 5;
 
-const int PIN_OPTO_LIGHT = 2;
+const int PIN_OPTO_LIGHT = 15;
 
 /*
    The EEPROM layout, starting at START_ADDRESS, is:
@@ -386,6 +386,8 @@ boolean findWheelSlot() {
   boolean seenMinDark = false;
   int count = 0;
   int i;
+
+  Serial.println(F("Finding the disk slot"));
 
   // Turn up to 1 and 1/4 revolutions to find the slot in the wheel.
   for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 4); ++i) {

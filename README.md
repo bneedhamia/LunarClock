@@ -14,13 +14,13 @@ a Sparkfun CC3000 WiFi Shield, and an AdaFruit 28BYJ-48 12V.  Details are in the
 NOTE: This is a work in progress. I'm in the process of porting the project to a
 Sparkfun ESP8266 Thing Dev board.
 
-State: In the midst of porting the code to an ESP8266 Thing Dev board:
-it reads HM Almanac page to get the current age of the moon in days
+State: In the midst of porting the code to an ESP8266 Thing Dev board: the parts work individually,
+but when the disk is turned before trying to connect to the wifi, the connection fails.
+It reads HM Almanac page to get the current age of the moon in days
 and percent of its face that is illuminated;
 it used to turn an AdaFruit 28BYJ-48 12V stepper motor in half-step mode;
 ; the state machine to run the whole thing is
-defined and partially implemented. The code to position the wheel based on the opto-interrupter is in place,
-and is awaiting the mechanical design and the circuit port to ESP8266 Thing Dev board.
+defined and partially implemented, awaiting the mechanical design.
 
 Next steps: Complete the port to ESP8266; start sketching the rest of the to-be-laser-cut mechanical parts;
 finish writing the state machine code, to retry wifi failures and query the site once every day.
