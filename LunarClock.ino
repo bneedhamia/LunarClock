@@ -17,21 +17,19 @@
 */
 
 /*
-   This sketch requires an Arduino Mega 2560,
-   a Sparkfun Transmogrishield on top of that
-   (https://www.sparkfun.com/products/11469),
-   a Sparkfun CC3000 WiFi Shield on top of that
-   (https://www.sparkfun.com/products/12071),
+   This sketch requires a Sparkfun ESP8266 Thing Dev board
+   (https://www.sparkfun.com/products/13804),
    a 28BYJ-48 12V unipolar stepper motor
    (Datasheet at http://www.emartee.com/product/41757/)
    controlled by a set of discrete parts (TIP120s),
-   an opto-interrupter for aligning the image of the moon.
+   an opto-interrupter for aligning the image of the moon
+   (https://www.sparkfun.com/products/9299).
    XXX and more parts.
 
-   See BillOfMaterials.ods for all the parts.
+   See the Sparkfun ESP8266 Thing Dev board page above
+   for instructions on installing the Arduino ESP8266 support.
 
-   The Transmogrishield is needed because the SPI pins
-   are different on the Arduino Mega than the Uno.
+   See BillOfMaterials.ods for all the parts.
 */
 
 #include <stdlib.h>
@@ -40,6 +38,14 @@
 #include <ESP8266HTTPClient.h>
 #include <EEPROM.h>      // NOTE: ESP8266 EEPROM library differs from Arduino's.
 
+/*
+ * ESP8266 Note: for the WiFi to function properly,
+ * there must *never* be a time over say 1 second where
+ * either delay() or loop() is not called.
+ * 
+ * Note: that implies that no delay() call can be longer than say 1 second.
+ */
+ 
 /*
    Pins:
    
@@ -237,7 +243,7 @@ int illuminatedPC;       // percent (0..100) of the moon's surface that's illumi
 //                           "Host: astro.ukho.gov.uk\n"
 //                           "Connection: close\n"
 //                           "\n";
-const char PageUrl[] = "astro.ukho.gov.uk/nao/miscellanea/birs2.html";
+const char PageUrl[] = "http://astro.ukho.gov.uk/nao/miscellanea/birs2.html";
 
 /*
    Our state machine, that keeps track of what to do next.
@@ -296,14 +302,6 @@ void setup() {
     state = STATE_ERROR;
     return;
   }
-
-  /*
-     Give the developer a chance to start the Serial Monitor
-     before we start up the WiFi.
-     We do this because some WiFi boards seem to get upset
-     if they are reset in the middle of trying to connect.
-  */
-  delay(5000);
 
   Serial.println(F("Starting..."));
   /*
@@ -481,21 +479,25 @@ boolean turnWheelToPhase(double daysSinceNewMoon) {
    Returns true if successful; false otherwise.
 */
 boolean doNetworkWork() {
-  Serial.print(F("Connecting to <"));
-  Serial.print(wifiSsid);
-  Serial.println(F(">"));
-
-  Serial.print(F("Password=<"));
-  Serial.print(wifiPassword);
-  Serial.println(">");
+  Serial.print(F("Connecting to "));
+  Serial.println(wifiSsid);
 
   WiFi.begin(wifiSsid, wifiPassword);
-  while (WiFi.status() != WL_CONNECTED) {
-    //add a timeout.
-    delay(500);
-    Serial.print('.');
+  // Wait for the connection or timeout. Put this in the state machine.
+  int wifiStatus = WiFi.status();
+  while (wifiStatus != WL_CONNECTED)
+  {    
+    delay(100);
+    Serial.print(".");
+    
+    wifiStatus = WiFi.status();
   }
-  Serial.println("Connected.");
+
+  Serial.println();
+
+  Serial.print("Connected, IP address: ");
+  Serial.println(WiFi.localIP());
+
 
   // Do a query to get the date and the age of the moon.
 
@@ -537,26 +539,27 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
 
   pHttpStream = httpGet.getStreamPtr();
 
-  if (!findDate(pDateTimeUTC)) {
-    Serial.println(F("No Date: in header"));
-    return false;
-  }
-
-  Serial.println(F("Found Date: "));
-  Serial.print(F("days since Sunday: "));
-  Serial.println(pDateTimeUTC->daySinceSunday);
-  Serial.print(F("day of month: "));
-  Serial.println(pDateTimeUTC->day);
-  Serial.print(F("Month: "));
-  Serial.println(pDateTimeUTC->month);
-  Serial.print(F("Year: "));
-  Serial.println(pDateTimeUTC->year);
-  Serial.print(F("Hour: "));
-  Serial.println(pDateTimeUTC->hour);
-  Serial.print(F("Minute: "));
-  Serial.println(pDateTimeUTC->minute);
-  Serial.print(F("Second: "));
-  Serial.println(pDateTimeUTC->second);
+//ESP8266 lib doesn't return headers this way.
+//  if (!findDate(pDateTimeUTC)) {
+//    Serial.println(F("No Date: in header"));
+//    return false;
+//  }
+//
+//  Serial.println(F("Found Date: "));
+//  Serial.print(F("days since Sunday: "));
+//  Serial.println(pDateTimeUTC->daySinceSunday);
+//  Serial.print(F("day of month: "));
+//  Serial.println(pDateTimeUTC->day);
+//  Serial.print(F("Month: "));
+//  Serial.println(pDateTimeUTC->month);
+//  Serial.print(F("Year: "));
+//  Serial.println(pDateTimeUTC->year);
+//  Serial.print(F("Hour: "));
+//  Serial.println(pDateTimeUTC->hour);
+//  Serial.print(F("Minute: "));
+//  Serial.println(pDateTimeUTC->minute);
+//  Serial.print(F("Second: "));
+//  Serial.println(pDateTimeUTC->second);
 
   if (!pHttpStream->find("age of the Moon is ")) {
     Serial.println(F("No age of moon in response."));
