@@ -11,15 +11,18 @@ the percentage of its face that is illuminated.
 The current Sketch requires an Arduino Mega, a Sparkfun Transmogrishield,
 a Sparkfun CC3000 WiFi Shield, and an AdaFruit 28BYJ-48 12V.  Details are in the code.
 
-NOTE: This is a work in progress. I'm currently developing it. Actually, it's sort of stalled, awaiting inspiration. I definitely need to replace the Arduino boards with a single ESP8266-based board.
+NOTE: This is a work in progress. I'm in the process of porting the project to a
+Sparkfun ESP8266 Thing Dev board.
 
-State: it turns an AdaFruit 28BYJ-48 12V stepper motor in half-step mode;
-it reads HM Almanac page to read the date/time (UTC), the current age of the moon in days,
-and percent of its face that is illuminated; the state machine to run the whole thing is
+State: In the midst of porting the code to an ESP8266 Thing Dev board:
+it reads HM Almanac page to get the current age of the moon in days
+and percent of its face that is illuminated;
+it used to turn an AdaFruit 28BYJ-48 12V stepper motor in half-step mode;
+; the state machine to run the whole thing is
 defined and partially implemented. The code to position the wheel based on the opto-interrupter is in place,
-and is awaiting the mechanical design.
+and is awaiting the mechanical design and the circuit port to ESP8266 Thing Dev board.
 
-Next steps: start sketching the rest of the to-be-laser-cut mechanical parts;
+Next steps: Complete the port to ESP8266; start sketching the rest of the to-be-laser-cut mechanical parts;
 finish writing the state machine code, to retry wifi failures and query the site once every day.
 
 ## Files
