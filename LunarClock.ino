@@ -1,4 +1,3 @@
-//345678901234567890123456789312345678941234567895123456789612345678971234567898
 /*
    Net-connected lunar clock.
    Rotates a dial showing the current phase of the moon,
@@ -9,12 +8,13 @@
    Note: that web page is Crown Copyright.
    Read the site Copyright and Licensing page before using it.
 
-   Copyright (c) 2015 Bradford Needham
+   Copyright (c) 2015, 2017 Bradford Needham
    { @bneedhamia , https://www.needhamia.com }
 
    Licensed under GPL V2
    a copy of which should have been supplied with this file.
 */
+//345678901234567890123456789312345678941234567895123456789612345678971234567898
 
 /*
    This sketch requires a Sparkfun ESP8266 Thing Dev board
@@ -40,7 +40,7 @@
 
 /*
  * ESP8266 Note: for the WiFi to function properly,
- * there must *never* be a time over say 1 second where
+ * there must never be a time over say 1 second where
  * either delay() or loop() is not called.
  * 
  * Note: that implies that no delay() call can be longer than say 1 second.
@@ -68,10 +68,10 @@
 
 */
 
-const int PIN_STEP_ORANGE = 4;
-const int PIN_STEP_PINK = 12;
-const int PIN_STEP_YELLOW = 13;
-const int PIN_STEP_BLUE = 14;
+const int PIN_STEP_ORANGE = 12;
+const int PIN_STEP_PINK = 13;
+const int PIN_STEP_YELLOW = 4;
+const int PIN_STEP_BLUE = 0;
 
 const int PIN_LED = 5;
 
@@ -308,8 +308,7 @@ void setup() {
      Initialization is complete.
      Next, we rotate the lunar wheel to a known starting place.
   */
-//  state = STATE_FIND_SLOT; ONCE THE PHOTO-INTERRUPTER WORKS.
-  state = STATE_WEB_QUERY;
+  state = STATE_FIND_SLOT;
 }
 
 void loop() {
