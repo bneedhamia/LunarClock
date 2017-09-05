@@ -1,4 +1,4 @@
-![The Project so far](../blob/master/Project.jpg "The Project so far")
+![The Project so far](https://github.com/bneedhamia/LunarClock/blob/master/Project.jpg)
 # LunarClock
 An ESP8266 Thing Arduino Sketch to display the current phase of the moon,
 as reported by
