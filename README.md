@@ -1,5 +1,6 @@
+![The Project so far](https://github.com/bneedhamia/LunarClock/blob/master/Project.jpg "The Project so far")
 # LunarClock
-ESP8266 Thing Arduino Sketch to display the current phase of the moon,
+An ESP8266 Thing Arduino Sketch to display the current phase of the moon,
 as reported by
 [HM Nautical Almanac Office: Miscellanea, Daily Rise/set and Twilight times for the British Isles]
 (http://astro.ukho.gov.uk/nao/miscellanea/birs2.html). It does this by rotating a disk
