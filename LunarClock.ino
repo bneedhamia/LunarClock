@@ -23,18 +23,26 @@
    (Datasheet at http://www.emartee.com/product/41757/)
    controlled by a set of discrete parts (TIP120s),
    a photo-interrupter for aligning the image of the moon
-   (https://www.sparkfun.com/products/9299).
-   XXX and more parts.
+   (https://www.sparkfun.com/products/9299),
+   a level shifter to convert the 5V photo-interrupter output
+   into a 3.3V ESP8266 input,
+   and several more parts.
+   See BillOfMaterials.ods for the complete parts list.
 
    See the Sparkfun ESP8266 Thing Dev board page above
    for instructions on installing the Arduino ESP8266 support.
-
-   See BillOfMaterials.ods for all the parts.
 
    ESP8266 Note: for the WiFi to function properly,
    there must never be a time longer than say 1 second where
    either delay() or loop() is not called.
    That implies that no delay() call can be longer than say 1 second.
+
+   ESP8266 Thing Dev board I/O pin notes:
+   - Pin 2 seems unusual. When I connected it to the photo-interrupter output,
+     The ESP8266 just kept resetting over and over.
+   - Several people caution that Pin 15 must be LOW at boot time,
+     or else the ESP8266 will try to boot from an external device.
+     I haven't noticed that problem.
 */
 
 #include <float.h>       // For DBL_MAX
@@ -43,7 +51,7 @@
 #include <EEPROM.h>      // NOTE: ESP8266 EEPROM library differs from Arduino's.
 
 /*
-   Pins:
+   I/O Pins:
 
    Pins controlling the stepper motor.
    These pins control the Base voltages of each
@@ -91,7 +99,7 @@ const byte EEPROM_END_MARK = 255; // marks the end of the data we wrote to EEPRO
 const int EEPROM_MAX_STRING_LENGTH = 120; // max string length in EEPROM
 
 /*
-   States of our state machine that keeps track of what to do inside loop().
+   States of our state machine that controls what to do inside loop().
 
    STATE_ERROR = encountered an unrecoverable error. Do nothing more.
    STATE_FINDING_SLOT = turning the wheel to the edge of the slot.
@@ -106,7 +114,6 @@ const int EEPROM_MAX_STRING_LENGTH = 120; // max string length in EEPROM
      In this state, stepsRemaining is the number of steps remaining to turn
      the wheel before we're done.
    STATE_WAITING = waiting for the time to query the site again.
-   STATE_DONE = used only for development. Says we're done.
 */
 const byte STATE_ERROR                  = 0;
 const byte STATE_FINDING_SLOT           = 1;
@@ -114,7 +121,6 @@ const byte STATE_TURNING_TO_FIRST_IMAGE = 2;
 const byte STATE_WEB_QUERY              = 3;
 const byte STATE_TURNING_TO_IMAGE       = 4;
 const byte STATE_WAITING                = 5;
-const byte STATE_DONE                   = 6;
 
 /*
    STEPS_PER_REVOLUTION = the number of (integer) steps in one revolution
@@ -162,7 +168,7 @@ const int STEPS_SLOT_TO_MOON = 33; //XXX need to calibrate this when the clock i
 const int NUM_MOON_IMAGES = 8;
 const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
 const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
-const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7;  //XXX need to change this when the mech. design is done.
+const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7.0;  //XXX need to change this when the mech. design is done.
 
 /*
    Width (milliseconds) of each (half) step in the stepper motor sequence.
@@ -181,7 +187,9 @@ const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7;  //XXX need to cha
 const int PULSE_WIDTH_MS = 10;
 
 /*
-   The Date and Time returned from parseDate().
+ * XXX UNUSED because the current code doesn't read the date/time header field
+ * from the web response. Need to learn how to do that with the ESP8266 lib.
+   The Date and Time returned from findDate().
    I would have used the C++ struct tm,
    but that didn't seem to be available in the Arduino library.
    NOTE: some fields' values differ from the corresponding fields in struct tm.
@@ -307,19 +315,6 @@ unsigned int wifiTimeoutMs = 20 * 1000;  // connection timeout.
    Declarations of our functions. See their definitions (code)
    for how they're used.
 */
-//boolean doNetworkWork();
-//boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-//              int *pIlluminatedPC);
-//boolean findDate(struct HttpDateTime *pDateTimeUTC);
-//double readDouble();
-//boolean findWheelSlot();
-//boolean turnWheelToPhase(double daysSinceNewMoon);
-//void step(int steps);
-//char *readEEPROMString(int baseAddress, int stringNumber);
-//void  Ram_TableDisplay(void);
-//boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-//              int *pIlluminatedPC);
-//boolean turnWheelToPhase(double daysSinceNewMoon);
 
 // Called once automatically on Reset.
 void setup() {
@@ -341,6 +336,12 @@ void setup() {
   pinMode(PIN_STEP_BLUE, OUTPUT);
   digitalWrite(PIN_STEP_BLUE, LOW);
 
+  // Wait a bit for Serial to work properly.
+  // Remember we can't delay() for very long without confusing the WiFi.
+  for (int i = 0; i < 10; ++i) {
+    delay(50);
+  }
+
   Serial.println(F("Reset."));
 
   state = STATE_ERROR;
@@ -358,6 +359,8 @@ void setup() {
   WiFi.mode(WIFI_STA);    // Station (Client), not soft AP or dual mode.
   WiFi.setAutoConnect(false); // don't connect until I say
   WiFi.setAutoReconnect(true); // if the connection drops, reconnect.
+
+  connectToAccessPoint(); //What if the access point is down?
 
   Serial.println(F("Starting."));
   /*
@@ -405,18 +408,22 @@ void loop() {
         break;
       }
 
-      // We now know the date and the phase of the moon.
-      state = STATE_TURNING_TO_IMAGE;
+      /*
+         We now know the date and the phase of the moon.
+         Set up the state machine to turn the wheel to the
+         correponding image.
+      */
+      beginTurningToImage();
       break;
 
-    case STATE_TURNING_TO_IMAGE:  // turn the wheel to the current phase of the moon
-      //XXX rewrite this to step once per loop().
-      if (!turnWheelToPhase(daysSinceNewMoon)) {
-        state = STATE_ERROR;
-        break;
+    case STATE_TURNING_TO_IMAGE:  // turning the wheel to the current phase of the moon
+      if (stepsRemaining > 0) {
+        step();
+        --stepsRemaining;
+      } else {
+        // We've finished turning the wheel. Wait until time to query again.
+        state = STATE_ERROR; //XXX for now.
       }
-
-      state = STATE_ERROR; //XXX for now.
       break;
 
     case STATE_WAITING:   // waiting until it's the right time to query again.
@@ -451,19 +458,19 @@ void beginFindingSlot() {
 }
 
 /*
- * Performs the STATE_FINDING_SLOT loop().
- * Called each time the state machine is in the STATE_FINDING_SLOT state.
- * 
- * Because there can be noise at each edge of the slot,
- * the algorithm for finding the slot is:
- * 1) Turn until we see MIN_DARK_STEPS contiguous steps outside the slot.
- * 2) Turn until we see the slot.
- * 
- * There are three outcomes from this function:
- * 1) Error: we've turned the disk a lot without finding the slot.
- * 2) Not yet. We haven't yet found the slot.
- * 3) Yes. We've found the slot.
- */
+   Performs the STATE_FINDING_SLOT loop().
+   Called each time the state machine is in the STATE_FINDING_SLOT state.
+
+   Because there can be noise at each edge of the slot,
+   the algorithm for finding the slot is:
+   1) Turn until we see MIN_DARK_STEPS contiguous steps outside the slot.
+   2) Turn until we see the slot.
+
+   There are three outcomes from this function:
+   1) Error: we've turned the disk a lot without finding the slot.
+   2) Not yet. We haven't yet found the slot.
+   3) Yes. We've found the slot.
+*/
 void runStateFindingSlot() {
 
   if (numDarkStepsSeen < MIN_DARK_STEPS) {
@@ -478,13 +485,13 @@ void runStateFindingSlot() {
     }
   } else {
     // We're clearly outside the slot, looking for the edge of the slot.
-    
+
     if (digitalRead(PIN_LIGHT_DETECTED) == HIGH) {
       // We have found the slot.  Move to the first image.
-      
+
       state = STATE_TURNING_TO_FIRST_IMAGE;
       stepsRemaining = STEPS_SLOT_TO_MOON;
-      
+
       step();
       --stepsRemaining;
 
@@ -503,55 +510,73 @@ void runStateFindingSlot() {
   --stepsRemaining;
 }
 
-/*XXX rewrite into a setup and loop() state machine that does one step per loop().
-   Turns the lunar images wheel to show the phase of the moon
-   corresponding to the given age of the moon.
-
-   Returns true if successful; false otherwise.
+/*
+   Begin the process of turning the wheel to the lunar image
+   that corresponds to daysSinceNewMoon.
+   The finding of the slot will be done in STATE_TURNING_TO_IMAGE.
 */
-boolean turnWheelToPhase(double daysSinceNewMoon) {
-  int desiredIndex = 0;  // index of the lunar image we want to display; new moon = 0.
-  double desiredAngleSteps = 0.0; // desired position of the wheel, in fractional steps from the new moon.
-  int stepsToMove = 0;   // number of steps required to turn to the desired angle.
+void beginTurningToImage() {
+  double desiredAngleSteps;
+
+  state = STATE_TURNING_TO_IMAGE;
+
+  desiredAngleSteps = moonAgeToAngleSteps(daysSinceNewMoon);
+
+  // This calculation isn't quite right.
+  stepsRemaining = (int) (desiredAngleSteps - currentAngleSteps + 0.5);
+  while (stepsRemaining < 0) {
+    stepsRemaining += STEPS_PER_REVOLUTION;
+  }
+
+  /*
+   * Take the first step.
+   * If we're already where we want to be, don't step.
+   * STATE_TURNING_TO_IMAGE will take things from here.
+   */
+  if (stepsRemaining > 0) {
+    step();
+    --stepsRemaining;
+  }
+
+  /*
+     Update the position of the wheel relative to the new moon,
+     in anticipation of having moving there.
+  */
+  currentAngleSteps = desiredAngleSteps;
+}
+
+/*
+   Converts the given age of the moon into the angleSteps
+     (see currentAngleSteps) of the corresponding lunar image.
+   daysSinceNewMoon = age of the moon, in fractional days since the new moon.
+
+   Returns the fractional angle of the corresponding lunar image,
+*/
+double moonAgeToAngleSteps(double daysSinceNewMoon) {
+  int desiredIndex = 0;  // index of the lunar image to display; new moon = 0.
+  double desiredAngleSteps = 0.0; // value to return.
 
   // Find which image we want to move to (rounded to an integer).
   desiredIndex = (int) ((daysSinceNewMoon + (DAYS_PER_IMAGE / 2)) / DAYS_PER_IMAGE);
-  if (desiredIndex < 0) {
-    // Error.
-    Serial.print("Calculated Index < 0: ");
-    Serial.println(desiredIndex);
-    return false;
-  }
-  if (desiredIndex > NUM_MOON_IMAGES - 1) {  // Needed because floating point numbers aren't exact.
-    desiredIndex = NUM_MOON_IMAGES - 1;
-  }
 
   Serial.print(F("Moving to image "));
   Serial.println(desiredIndex);
 
-  desiredAngleSteps = desiredIndex * STEPS_PER_IMAGE;
-  stepsToMove = (int) (desiredAngleSteps - currentAngleSteps + 0.5);
-  while (stepsToMove < 0) {
-    stepsToMove += STEPS_PER_REVOLUTION;
+  // Floating point calculations can produce a slightly over-range value. Fix it.
+  if (desiredIndex > NUM_MOON_IMAGES - 1) {
+    desiredIndex = NUM_MOON_IMAGES - 1;
   }
 
-  step(stepsToMove);
+  desiredAngleSteps = desiredIndex * STEPS_PER_IMAGE;
 
-  // Update the position of the wheel relative to the new moon.
-  currentAngleSteps += desiredAngleSteps;
-
-  return true;
+  return desiredAngleSteps;
 }
 
 /*
-   Performs one run of our network activity:
-   Connects to the WiFi access point,
-   performs the lunar phase query,
-   then disconnects.
-
-   Returns true if successful; false otherwise.
-*/
-boolean doNetworkWork() {
+ * Connect to the local WiFi Access Point.
+ * The Auto Reconnect feature of the ESP8266 should keep us connected.
+ */
+void connectToAccessPoint() {
   Serial.print(F("Connecting to "));
   Serial.println(wifiSsid);
 
@@ -568,10 +593,20 @@ boolean doNetworkWork() {
 
   Serial.println();
 
-  Serial.print("Connected, IP address: ");
+  Serial.print(F("Connected, IP address: "));
   Serial.println(WiFi.localIP());
 
+}
 
+/*
+   Performs one run of our network activity:
+   Connects to the WiFi access point,
+   performs the lunar phase query,
+   then disconnects.
+
+   Returns true if successful; false otherwise.
+*/
+boolean doNetworkWork() {
   // Do a query to get the date and the age of the moon.
 
   if (!query(&dateTimeUTC, &daysSinceNewMoon, &illuminatedPC)) {
@@ -598,14 +633,13 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
               int *pIlluminatedPC) {
 
   Serial.print(F("Querying "));
-  Serial.print(PageUrl);
-  Serial.println(F(" ..."));
+  Serial.println(PageUrl);
 
   httpGet.useHTTP10(true); // to prevent chunking, which adds garbage characters.
   httpGet.begin(PageUrl);
   int httpCode = httpGet.GET();
   if (!(200 <= httpCode && httpCode < 300)) {
-    Serial.print("HTTP Get failed. Code = ");
+    Serial.print(F("HTTP Get failed. Code = "));
     Serial.println(httpCode);
     return false;
   }
@@ -951,17 +985,6 @@ double readDouble() {
 }
 
 /*
-   Rotate the given number of whole steps clockwise.
-   steps = positive number of steps clockwise to turn.
-   Note: steps can't be larger than 32767.
-*/
-void step(int steps) {
-  for (int i = 0; i < steps; ++i) {
-    step();
-  }
-}
-
-/*
    Rotate the disk one step clockwise.
 */
 void step() {
@@ -1080,8 +1103,8 @@ int get_free_memory();
 
 void	Ram_TableDisplay(void)
 {
-  Serial.println("No Ram display on ESP8266");
-  // ESP8266 does have "ESP.getFreeHeap() and doesn't have __malloc_margin.
+  Serial.println(F("No Ram display on ESP8266"));
+  // ESP8266 does have ESP.getFreeHeap() and doesn't have __malloc_margin.
   //  char stack = 1;
   //  extern char *__data_start;
   //  extern char *__data_end;
