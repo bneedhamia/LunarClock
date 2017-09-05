@@ -1,9 +1,8 @@
-![The Project so far](https://github.com/bneedhamia/LunarClock/blob/master/Project.jpg "The Project so far")
+![The Project so far](../blob/master/Project.jpg "The Project so far")
 # LunarClock
 An ESP8266 Thing Arduino Sketch to display the current phase of the moon,
 as reported by
-[HM Nautical Almanac Office: Miscellanea, Daily Rise/set and Twilight times for the British Isles]
-(http://astro.ukho.gov.uk/nao/miscellanea/birs2.html). It does this by rotating a disk
+[HM Nautical Almanac Office: Miscellanea, Daily Rise/set and Twilight times for the British Isles](http://astro.ukho.gov.uk/nao/miscellanea/birs2.html). It does this by rotating a disk
 that has 8 lunar images on it, to align the appropriate image with a window in the clock.
 
 That page provides the time of sunrise/sunset/etc., for many locations in Britain and Ireland.
