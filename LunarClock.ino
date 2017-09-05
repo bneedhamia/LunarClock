@@ -354,6 +354,11 @@ void setup() {
     return;
   }
 
+  // Do the one-time WiFi setup:
+  WiFi.mode(WIFI_STA);    // Station (Client), not soft AP or dual mode.
+  WiFi.setAutoConnect(false); // don't connect until I say
+  WiFi.setAutoReconnect(true); // if the connection drops, reconnect.
+
   Serial.println(F("Starting."));
   /*
      Initialization is complete.
@@ -498,67 +503,7 @@ void runStateFindingSlot() {
   --stepsRemaining;
 }
 
-/*OBSOLETE
-   Turns the stepper motor until the edge of the slot appears in front of the
-   photo-interrupter. We need to do this on Reset to move the wheel
-   to a known position.
-
-   In case we're already somewhere in the slot,
-   we wait for MIN_DARK_STEPS contiguous steps outside the slot
-   before we start looking for the beginning of the slot.
-*/
-boolean findWheelSlot() {
-  boolean seenMinDark = false;
-  int count = 0;
-  int i;
-
-  Serial.println(F("Finding the disk slot"));
-
-  // Turn up to 1 and 1/4 revolutions to find the slot in the wheel.
-  for (i = 0; i < STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 4); ++i) {
-    step(1);
-
-    if (!seenMinDark) {
-      if (digitalRead(PIN_LIGHT_DETECTED) == HIGH) {
-        continue; // light. (still) in the slot.
-      }
-
-      // Dark. Possibly outside the slot.
-      ++count;
-      if (count < MIN_DARK_STEPS) {
-        continue; // not yet safely outside the slot.
-      }
-
-      // Seen MIN_DARK_STEPS - we're now clearly outside the slot.
-      seenMinDark = true;
-      count = 0;
-    } else {
-      // Searching for the slot.
-      if (digitalRead(PIN_LIGHT_DETECTED) == LOW) {
-        continue; // still dark
-      }
-      ++count;
-      break; // we're done.
-    }
-  }
-  if (!seenMinDark || count == 0) {
-    Serial.println(F("Slot not found."));
-    return false;
-  }
-
-  /*
-     We are positioned at the slot.
-     Move forward to get to align a lunar image in the window.
-     Note where the wheel is relative to the new moon.
-  */
-
-  step(STEPS_SLOT_TO_MOON);
-  currentAngleSteps = INITIAL_IMAGE_ANGLE_STEPS;
-
-  return true;
-}
-
-/*
+/*XXX rewrite into a setup and loop() state machine that does one step per loop().
    Turns the lunar images wheel to show the phase of the moon
    corresponding to the given age of the moon.
 
