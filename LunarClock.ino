@@ -94,18 +94,27 @@ const int EEPROM_MAX_STRING_LENGTH = 120; // max string length in EEPROM
    States of our state machine that keeps track of what to do inside loop().
 
    STATE_ERROR = encountered an unrecoverable error. Do nothing more.
-   STATE_FIND_SLOT = search for the slot that tells us the wheel position.
+   STATE_FINDING_SLOT = turning the wheel to the edge of the slot.
+     In this state, stepsRemaining is the number of steps remaining before
+     we give up our search for the slot.
+   STATE_TURNING_TO_FIRST_IMAGE = turning the wheel to center the first
+     lunar image in the display.
+     In this state, stepsRemaining is the number of steps remaining to turn
+     the wheel before we're done.
    STATE_WEB_QUERY = query the web site to find the time and moon phase.
-   STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
+   STATE_TURNING_TO_IMAGE = turning the wheel to show the correct moon phase.
+     In this state, stepsRemaining is the number of steps remaining to turn
+     the wheel before we're done.
    STATE_WAITING = waiting for the time to query the site again.
    STATE_DONE = used only for development. Says we're done.
 */
-const byte STATE_ERROR        = 0;
-const byte STATE_FIND_SLOT    = 1;
-const byte STATE_WEB_QUERY    = 2;
-const byte STATE_TURN_WHEEL   = 3;
-const byte STATE_WAITING      = 4;
-const byte STATE_DONE         = 5;
+const byte STATE_ERROR                  = 0;
+const byte STATE_FINDING_SLOT           = 1;
+const byte STATE_TURNING_TO_FIRST_IMAGE = 2;
+const byte STATE_WEB_QUERY              = 3;
+const byte STATE_TURNING_TO_IMAGE       = 4;
+const byte STATE_WAITING                = 5;
+const byte STATE_DONE                   = 6;
 
 /*
    STEPS_PER_REVOLUTION = the number of (integer) steps in one revolution
@@ -233,11 +242,11 @@ WiFiClient *pHttpStream = 0; // stream of data from the Http Get
 struct HttpDateTime dateTimeUTC;
 
 /*
- * Moon data from the web site:
- * 
- * daysSinceNewMoon = number of days (0.0 .. 29.53) since the New Moon.
- * illuminatedPC = percent (0..100) of the moon's surface that's illuminated (unused).
- */
+   Moon data from the web site:
+
+   daysSinceNewMoon = number of days (0.0 .. 29.53) since the New Moon.
+   illuminatedPC = percent (0..100) of the moon's surface that's illuminated (unused).
+*/
 double daysSinceNewMoon;
 int illuminatedPC;
 
@@ -266,10 +275,18 @@ const char PageUrl[] = "http://astro.ukho.gov.uk/nao/miscellanea/birs2.html";
 
 
 /*
- * The current state of the state machine that runs the loop().
- * See STATE_* above.
- */
+   The state machine variables.
+
+   state = The current state of the state machine that runs the loop().
+     See STATE_* above.
+   stepsRemaining = In some states, if non-zero, the number of steps
+     remaining to turn the wheel. See STATE_* for details.
+   numDarkStepsSeen = In STATE_FINDING_SLOT, the number of continuous
+     dark (not in the slot) steps seen so far.
+*/
 byte state;
+int stepsRemaining;
+int numDarkStepsSeen;
 
 /*
    WiFi access point parameters.
@@ -287,23 +304,22 @@ char *wifiPassword;
 unsigned int wifiTimeoutMs = 20 * 1000;  // connection timeout.
 
 /*
- * Declarations of our functions. See their definitions (code)
- * for how they're used.
- */
-boolean doNetworkWork();
-boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-              int *pIlluminatedPC);
-boolean findDate(struct HttpDateTime *pDateTimeUTC);
-double readDouble();
-boolean findWheelSlot();
-boolean turnWheelToPhase(double daysSinceNewMoon);
-void step(int steps);
-char *readEEPROMString(int baseAddress, int stringNumber);
-void  Ram_TableDisplay(void);
-boolean findWheelSlot();
-boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-              int *pIlluminatedPC);
-boolean turnWheelToPhase(double daysSinceNewMoon);
+   Declarations of our functions. See their definitions (code)
+   for how they're used.
+*/
+//boolean doNetworkWork();
+//boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
+//              int *pIlluminatedPC);
+//boolean findDate(struct HttpDateTime *pDateTimeUTC);
+//double readDouble();
+//boolean findWheelSlot();
+//boolean turnWheelToPhase(double daysSinceNewMoon);
+//void step(int steps);
+//char *readEEPROMString(int baseAddress, int stringNumber);
+//void  Ram_TableDisplay(void);
+//boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
+//              int *pIlluminatedPC);
+//boolean turnWheelToPhase(double daysSinceNewMoon);
 
 // Called once automatically on Reset.
 void setup() {
@@ -338,14 +354,15 @@ void setup() {
     return;
   }
 
-  Serial.println(F("Starting..."));
+  Serial.println(F("Starting."));
   /*
      Initialization is complete.
      Next, we rotate the lunar wheel to a known starting place.
   */
-  state = STATE_FIND_SLOT;
+  beginFindingSlot();
 }
 
+// Called continuously and automatically.
 void loop() {
   int i;
 
@@ -361,14 +378,19 @@ void loop() {
       delay(10); // so we don't spend all our time doing digitalWrite()
       break;
 
-    case STATE_FIND_SLOT:  // rotate the wheel to the slot, so we know the wheel position.
-      if (!findWheelSlot()) {
-        state = STATE_ERROR;
-        break;
-      }
+    case STATE_FINDING_SLOT:  // rotate the wheel to the slot, so we know the wheel position.
+      runStateFindingSlot();
+      break;
 
-      // The wheel is in its initial position.  Find the date and phase of the moon.
-      state = STATE_WEB_QUERY;
+    case STATE_TURNING_TO_FIRST_IMAGE: // rotate the wheel to the first lunar image.
+      if (stepsRemaining > 0) {
+        step();
+        --stepsRemaining;
+      } else {
+        // We've finished turning the wheel. Start the web query.
+        currentAngleSteps = INITIAL_IMAGE_ANGLE_STEPS;
+        state = STATE_WEB_QUERY;
+      }
       break;
 
     case STATE_WEB_QUERY:      // Find the date and the phase of the moon.
@@ -379,10 +401,11 @@ void loop() {
       }
 
       // We now know the date and the phase of the moon.
-      state = STATE_TURN_WHEEL;
+      state = STATE_TURNING_TO_IMAGE;
       break;
 
-    case STATE_TURN_WHEEL:  // turn the wheel to the current phase of the moon
+    case STATE_TURNING_TO_IMAGE:  // turn the wheel to the current phase of the moon
+      //XXX rewrite this to step once per loop().
       if (!turnWheelToPhase(daysSinceNewMoon)) {
         state = STATE_ERROR;
         break;
@@ -405,10 +428,77 @@ void loop() {
       Serial.println(((int) state) & 0xFF);
       state = STATE_ERROR;
   }
-
 }
 
 /*
+   Begin the process of turning the wheel to find the slot.
+   The finding of the slot will be done in STATE_FINDING_SLOT.
+*/
+void beginFindingSlot() {
+  state = STATE_FINDING_SLOT;
+
+  // Turn up to 1 and 1/4 revolutions to find the slot in the wheel.
+  stepsRemaining = STEPS_PER_REVOLUTION + (STEPS_PER_REVOLUTION / 4);
+  numDarkStepsSeen = 0;
+
+  step();
+  --stepsRemaining;
+}
+
+/*
+ * Performs the STATE_FINDING_SLOT loop().
+ * Called each time the state machine is in the STATE_FINDING_SLOT state.
+ * 
+ * Because there can be noise at each edge of the slot,
+ * the algorithm for finding the slot is:
+ * 1) Turn until we see MIN_DARK_STEPS contiguous steps outside the slot.
+ * 2) Turn until we see the slot.
+ * 
+ * There are three outcomes from this function:
+ * 1) Error: we've turned the disk a lot without finding the slot.
+ * 2) Not yet. We haven't yet found the slot.
+ * 3) Yes. We've found the slot.
+ */
+void runStateFindingSlot() {
+
+  if (numDarkStepsSeen < MIN_DARK_STEPS) {
+    // We're still looking to be clearly outside the slot.
+
+    if (digitalRead(PIN_LIGHT_DETECTED) == LOW) {
+      // (possibly) outside the slot.
+      ++numDarkStepsSeen;
+    } else {
+      // (still/again) in the slot. Start over.
+      numDarkStepsSeen = 0;
+    }
+  } else {
+    // We're clearly outside the slot, looking for the edge of the slot.
+    
+    if (digitalRead(PIN_LIGHT_DETECTED) == HIGH) {
+      // We have found the slot.  Move to the first image.
+      
+      state = STATE_TURNING_TO_FIRST_IMAGE;
+      stepsRemaining = STEPS_SLOT_TO_MOON;
+      
+      step();
+      --stepsRemaining;
+
+      return;
+    }
+  }
+
+  // We want to turn the disk another step.
+
+  if (stepsRemaining <= 0) {
+    // We've turned the wheel as far as we can and have not found the slot.
+    state = STATE_ERROR;
+    return;
+  }
+  step();
+  --stepsRemaining;
+}
+
+/*OBSOLETE
    Turns the stepper motor until the edge of the slot appears in front of the
    photo-interrupter. We need to do this on Reset to move the wheel
    to a known position.
@@ -916,53 +1006,45 @@ double readDouble() {
 }
 
 /*
-   Move the given number of whole steps clockwise.
-   steps = number of steps to move. positive is clockwise; negative is counterclockwise.
-   Note: steps can't be larger than +/-32767
+   Rotate the given number of whole steps clockwise.
+   steps = positive number of steps clockwise to turn.
+   Note: steps can't be larger than 32767.
 */
 void step(int steps) {
-  int nextIdx;
-  int number;  // positive number of steps to perform.
+  for (int i = 0; i < steps; ++i) {
+    step();
+  }
+}
 
-  if (steps >= 0) {
-    number = steps;
-  } else {
-    number = -steps;
+/*
+   Rotate the disk one step clockwise.
+*/
+void step() {
+  int nextIdx; // index of the motor coil after the current one.
+
+  // find the next index into sequence[]
+  nextIdx = curSeq + 1;
+  if (nextIdx >= SEQUENCE_STEPS) {
+    nextIdx = 0;
   }
 
-  for (int i = 0; i < number; ++i) {
+  /*
+     Perform the step:
+     1) activate the current and next coils (1/2 step).
+     2) give the motor time to turn
+     3) activate just the next coil (another 1/2 step).
+     4) give the motor time to turn
+     5) turn everything off so we don't waste power.
+  */
 
-    // find the next index into sequence[], based on the direction
-    if (steps >= 0) {
-      nextIdx = curSeq + 1;
-      if (nextIdx >= SEQUENCE_STEPS) {
-        nextIdx = 0;
-      }
-    } else {
-      nextIdx = curSeq - 1;
-      if (nextIdx < 0) {
-        nextIdx = SEQUENCE_STEPS - 1;
-      }
-    }
+  digitalWrite(sequence[curSeq], HIGH);
+  digitalWrite(sequence[nextIdx], HIGH);
+  delay(PULSE_WIDTH_MS);
+  digitalWrite(sequence[curSeq], LOW);
+  delay(PULSE_WIDTH_MS);
+  digitalWrite(sequence[nextIdx], LOW);
 
-    /*
-       Perform the step:
-       1) activate the current and next coils (1/2 step).
-       2) give the motor time to turn
-       3) activate just the next coil (another 1/2 step).
-       4) give the motor time to turn
-       5) turn everything off so we don't waste power.
-    */
-
-    digitalWrite(sequence[curSeq], HIGH);
-    digitalWrite(sequence[nextIdx], HIGH);
-    delay(PULSE_WIDTH_MS);
-    digitalWrite(sequence[curSeq], LOW);
-    delay(PULSE_WIDTH_MS);
-    digitalWrite(sequence[nextIdx], LOW);
-
-    curSeq = nextIdx;
-  }
+  curSeq = nextIdx;
 }
 
 /********************************
