@@ -37,7 +37,6 @@
    That implies that no delay() call can be longer than say 1 second.
 */
 
-//#include <stdlib.h> XXX why did I need this?
 #include <float.h>       // For DBL_MAX
 #include <ESP8266WiFi.h> // Defines WiFi, the WiFi controller object
 #include <ESP8266HTTPClient.h>
@@ -94,7 +93,7 @@ const int EEPROM_MAX_STRING_LENGTH = 120; // max string length in EEPROM
 /*
    States of our state machine that keeps track of what to do inside loop().
 
-   STATE_ERROR = encountered and unrecoverable error. Do nothing more.
+   STATE_ERROR = encountered an unrecoverable error. Do nothing more.
    STATE_FIND_SLOT = search for the slot that tells us the wheel position.
    STATE_WEB_QUERY = query the web site to find the time and moon phase.
    STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
@@ -188,7 +187,6 @@ struct HttpDateTime {
   short second;         // 0..61 (usually 0..59)
 };
 
-
 /*
    curentAngleSteps = the current position of the wheel, in (fractional) steps
    from the center of the new moon.
@@ -204,10 +202,12 @@ double currentAngleSteps;
    28BYJ-48 12V Stepper motor sequence.
 
    SEQUENCE_STEPS = number of values in sequence[].
-   sequence[] = the sequence of pin activation for clockwise rotation of the stepper motor.
-   curSeq = the current index into sequence[] corresponding to the state of the motor.
-     Note: on reset, we don't know the state of the motor, but it doesn't matter
-     because we'll rotate the motor to a known location (the slot).
+   sequence[] = the sequence of pin activation for clockwise rotation
+     of the stepper motor.
+   curSeq = the index into sequence[] corresponding to the current state
+     of the motor. Note: on reset, we don't know the state of the motor,
+     but it doesn't matter because we'll rotate the motor to a
+     known location (the slot).
 
    The commented-out sequences are the other 5 possible sequences of the 4 pins.
 */
@@ -232,8 +232,14 @@ WiFiClient *pHttpStream = 0; // stream of data from the Http Get
 */
 struct HttpDateTime dateTimeUTC;
 
-double daysSinceNewMoon;  // number of days (0.0 .. 29.53) since the New Moon.
-int illuminatedPC;       // percent (0..100) of the moon's surface that's illuminated (unused).
+/*
+ * Moon data from the web site:
+ * 
+ * daysSinceNewMoon = number of days (0.0 .. 29.53) since the New Moon.
+ * illuminatedPC = percent (0..100) of the moon's surface that's illuminated (unused).
+ */
+double daysSinceNewMoon;
+int illuminatedPC;
 
 /*
    The site to query:
@@ -259,6 +265,10 @@ int illuminatedPC;       // percent (0..100) of the moon's surface that's illumi
 const char PageUrl[] = "http://astro.ukho.gov.uk/nao/miscellanea/birs2.html";
 
 
+/*
+ * The current state of the state machine that runs the loop().
+ * See STATE_* above.
+ */
 byte state;
 
 /*
@@ -399,7 +409,7 @@ void loop() {
 }
 
 /*
-   Turns the stepper motor until the slot appears in front of the
+   Turns the stepper motor until the edge of the slot appears in front of the
    photo-interrupter. We need to do this on Reset to move the wheel
    to a known position.
 
@@ -420,11 +430,13 @@ boolean findWheelSlot() {
 
     if (!seenMinDark) {
       if (digitalRead(PIN_LIGHT_DETECTED) == HIGH) {
-        continue; // light
+        continue; // light. (still) in the slot.
       }
+
+      // Dark. Possibly outside the slot.
       ++count;
       if (count < MIN_DARK_STEPS) {
-        continue;
+        continue; // not yet safely outside the slot.
       }
 
       // Seen MIN_DARK_STEPS - we're now clearly outside the slot.
