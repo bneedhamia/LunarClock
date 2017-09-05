@@ -22,7 +22,7 @@
    a 28BYJ-48 12V unipolar stepper motor
    (Datasheet at http://www.emartee.com/product/41757/)
    controlled by a set of discrete parts (TIP120s),
-   an opto-interrupter for aligning the image of the moon
+   a photo-interrupter for aligning the image of the moon
    (https://www.sparkfun.com/products/9299).
    XXX and more parts.
 
@@ -30,25 +30,22 @@
    for instructions on installing the Arduino ESP8266 support.
 
    See BillOfMaterials.ods for all the parts.
+
+   ESP8266 Note: for the WiFi to function properly,
+   there must never be a time longer than say 1 second where
+   either delay() or loop() is not called.
+   That implies that no delay() call can be longer than say 1 second.
 */
 
-#include <stdlib.h>
+//#include <stdlib.h> XXX why did I need this?
 #include <float.h>       // For DBL_MAX
 #include <ESP8266WiFi.h> // Defines WiFi, the WiFi controller object
 #include <ESP8266HTTPClient.h>
 #include <EEPROM.h>      // NOTE: ESP8266 EEPROM library differs from Arduino's.
 
 /*
- * ESP8266 Note: for the WiFi to function properly,
- * there must never be a time over say 1 second where
- * either delay() or loop() is not called.
- * 
- * Note: that implies that no delay() call can be longer than say 1 second.
- */
- 
-/*
    Pins:
-   
+
    Pins controlling the stepper motor.
    These pins control the Base voltages of each
    of the 4 non-common wires of the stepper motor.
@@ -61,11 +58,15 @@
    PIN_STEP_PINK
    PIN_STEP_BLUE
 
-   PIN_LED = HIGH to light the yellow LED.
+   PIN_LED_L = LOW to light the yellow LED (and the on-board LED).
+     The _L suffix indicates that the pin is Active-Low.
+     Active-Low because that's how the ESP8266 Thing Dev board
+     on-board LED is wired.
 
-   PIN_OPTO_LIGHT = input from the opto-interruptor.  HIGH = slot is unobstructed.
-     That is, part of the lunar wheel slot is in front of the opto-interrupter.
-
+   PIN_LIGHT_DETECTED = input from the photo-interruptor.
+     HIGH = the detector is unobstructed (the detector's light is detected).
+     That is, part of the lunar wheel's slot is in front
+     of the photo-interrupter.
 */
 
 const int PIN_STEP_ORANGE = 12;
@@ -73,9 +74,9 @@ const int PIN_STEP_PINK = 13;
 const int PIN_STEP_YELLOW = 4;
 const int PIN_STEP_BLUE = 0;
 
-const int PIN_LED = 5;
+const int PIN_LED_L = 5;
 
-const int PIN_OPTO_LIGHT = 15;
+const int PIN_LIGHT_DETECTED = 15;
 
 /*
    The EEPROM layout, starting at START_ADDRESS, is:
@@ -86,19 +87,95 @@ const int PIN_OPTO_LIGHT = 15;
    To write these values, use the Sketch write_eeprom_strings.
    See https://github.com/bneedhamia/write_eeprom_strings
 */
-const int START_ADDRESS = 0;      // First address of EEPROM to write to.
+const int START_ADDRESS = 0;      // The first EEPROM address to read from.
 const byte EEPROM_END_MARK = 255; // marks the end of the data we wrote to EEPROM
 const int EEPROM_MAX_STRING_LENGTH = 120; // max string length in EEPROM
 
-char *wifiSsid;     // SSID of the network to connect to. Read from EEPROM.
-char *wifiPassword; // password of the network. Read from EEPROM.
-//XXX should put the security type in the EEPROM as well.
-//unsigned int wifiSecurity = WLAN_SEC_WPA2; // security type of the network.
-unsigned int wifiTimeoutMs = 20 * 1000;  // connection timeout.
+/*
+   States of our state machine that keeps track of what to do inside loop().
+
+   STATE_ERROR = encountered and unrecoverable error. Do nothing more.
+   STATE_FIND_SLOT = search for the slot that tells us the wheel position.
+   STATE_WEB_QUERY = query the web site to find the time and moon phase.
+   STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
+   STATE_WAITING = waiting for the time to query the site again.
+   STATE_DONE = used only for development. Says we're done.
+*/
+const byte STATE_ERROR        = 0;
+const byte STATE_FIND_SLOT    = 1;
+const byte STATE_WEB_QUERY    = 2;
+const byte STATE_TURN_WHEEL   = 3;
+const byte STATE_WAITING      = 4;
+const byte STATE_DONE         = 5;
+
+/*
+   STEPS_PER_REVOLUTION = the number of (integer) steps in one revolution
+   of our stepper motor.
+   The Adafruit datasheet for the 28BYJ-48 12V motor  at http://www.adafruit.com/products/918
+   lists 32 steps per revolution with a further gear ration of 16.025
+   which gives 32 * 16.025 = 512.8 steps per revolution.
+   Rounding to 513 produces an error of +0.2 steps per revolution
+   (that is, one of our revolutions is 0.2 steps larger than the real one).
+*/
+const int STEPS_PER_REVOLUTION = 513;
+
+/*
+   Because there may be noise (uncertainty) as the edge of the slot appears
+   in front of the photo-interrupter, we start turning the stepper motor,
+   then we expect to see the photo-interrupter dark for
+   at least MIN_DARK_STEPS contiguous steps (to get past the end of the slot)
+   before we start looking for the slot.
+
+   STEPS_SLOT_TO_MOON = the number of steps between
+   the detected start of the slot and the proper alignment of a lunar image
+   in the clock's window.
+   That is, how much to move after finding the slot.
+*/
+const int MIN_DARK_STEPS = STEPS_PER_REVOLUTION / (360 / 5); // 5 degrees
+const int STEPS_SLOT_TO_MOON = 33; //XXX need to calibrate this when the clock is finished.
+
+/*
+   NUM_MOON_IMAGES = the number of lunar images in the wheel.
+     We assume the images evenly divide one mean synodic month
+     (new moon to new moon), rather than, for example,
+     some image being 4 days long while another is 6 days long.
+   DAYS_PER_IMAGE = the number of days corresponding to each lunar image.
+     29.53059 is the length in days of the mean synodic month.
+   STEPS_PER_IMAGE = the number of steps to move from one image to the next.
+     Note: we keep current angle and steps per image in floating point
+     because NUM_MOON_IMAGES likely doesn't evenly divide STEPS_PER_REVOLUTION,
+     which would result in the image alignment drifting significantly
+     over a few months.
+
+   INITIAL_IMAGE_ANGLE_STEPS = the number of steps from the center of
+     the new moon image to the initial image.
+     That is, the initial angle of the wheel relative to the new moon.
+*/
+const int NUM_MOON_IMAGES = 8;
+const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
+const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
+const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7;  //XXX need to change this when the mech. design is done.
+
+/*
+   Width (milliseconds) of each (half) step in the stepper motor sequence.
+   Experimentation shows 4ms is good; 10 is strong & slow; 2 is fast & weak.
+
+   Calculating RPM from PULSE_WIDTH_MS:
+   mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
+   mS/minute   / steps per revolution / (2 * PULSE_WIDTH_MS) =
+   (1000 * 60) / 512.8                / 20 = about 5.8 RPM
+   Experimentally, one revolution took about 10 seconds, which would be 6 rpm.
+   So this looks right.
+
+   NOTE: During PULSE_WIDTH_MS, the stepper motor is drawing its full current,
+   so we want to choose the smallest value of PULSE_WIDTH_MS that turns the disk.
+*/
+const int PULSE_WIDTH_MS = 10;
 
 /*
    The Date and Time returned from parseDate().
-   I would have used the C++ struct tm, but that didn't seem to be available in the Arduino library.
+   I would have used the C++ struct tm,
+   but that didn't seem to be available in the Arduino library.
    NOTE: some fields' values differ from the corresponding fields in struct tm.
 */
 struct HttpDateTime {
@@ -111,16 +188,17 @@ struct HttpDateTime {
   short second;         // 0..61 (usually 0..59)
 };
 
-boolean doNetworkWork();
-boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
-              int *pIlluminatedPC);
-boolean findDate(struct HttpDateTime *pDateTimeUTC);
-double readDouble();
-boolean findWheelSlot();
-boolean turnWheelToPhase(double daysSinceNewMoon);
-void step(int steps);
-char *readEEPROMString(int baseAddress, int stringNumber);
-void  Ram_TableDisplay(void);
+
+/*
+   curentAngleSteps = the current position of the wheel, in (fractional) steps
+   from the center of the new moon.
+
+   A floating-point number to avoid accumulating errors
+   in dividing a revolution by the number of images,
+   which would cause the images to drift out of place
+   after a few months of constant running.
+*/
+double currentAngleSteps;
 
 /*
    28BYJ-48 12V Stepper motor sequence.
@@ -142,71 +220,6 @@ const int sequence[SEQUENCE_STEPS] =
 //{PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_YELLOW, PIN_STEP_PINK};    // quiver
 //{PIN_STEP_BLUE, PIN_STEP_ORANGE, PIN_STEP_PINK, PIN_STEP_YELLOW};    // strong counterclockwise
 int curSeq;
-
-/*
-   STEPS_PER_REVOLUTION = the number of (integer) steps in a revolution.
-   The Adafruit datasheet for the 28BYJ-48 12V motor  at http://www.adafruit.com/products/918
-   lists 32 steps per revolution with a further gear ration of 16.025
-   which gives 32 * 16.025 = 512.8 steps per revolution.
-   Rounding to 513 would produce an error of +0.2 steps per revolution
-   (that is, one of our revolutions is 0.2 steps larger than the real one).
-*/
-const int STEPS_PER_REVOLUTION = 513;
-
-/*
-   Width (milliseconds) of each (half) step in the stepper motor sequence.
-   Experimentation shows 4ms is good; 10 is strong & slow; 2 is fast & weak.
-
-   Calculating RPM from PULSE_WIDTH_MS:
-   mS/minute   * revolutions/step     * steps/mS = revolutions/minute =
-   mS/minute   / steps per revolution / (2 * PULSE_WIDTH_MS) =
-   (1000 * 60) / 512.8                / 20 = about 5.8 RPM
-   Experimentally, one revolution took about 10 seconds, which would be 6 rpm.  So this looks right.
-*/
-const int PULSE_WIDTH_MS = 10;
-
-/*
-   Because there may be noise (uncertainty) as the edge of the slot appears
-   in front of the opto-interrupter, we start turning the stepper motor,
-   then we expect to see the opto-interrupter dark for
-   at least MIN_DARK_STEPS contiguous steps (to get past the end of the slot)
-   before we start looking for the slot.
-
-   STEPS_SLOT_TO_MOON = the number of steps between the detected start of the slot
-   and the proper alignment of a lunar image in the clock's window.
-   That is, how much to move after finding the slot.
-
-   NUM_MOON_IMAGES = the number of lunar images in the wheel.
-   We assume the images evenly divide one mean synodic month (new moon to new moon),
-   rather than, for example, some image being 4 days long while another is 6 days long.
-
-   DAYS_PER_IMAGE = the number of days corresponding to each lunar image.
-     29.53059 is the length in days of the mean synodic month
-   STEPS_PER_IMAGE = the number of steps to move from one image to the next.
-     Note: we keep current angle and steps per image in floating point
-     because NUM_MOON_IMAGES likely doesn't evenly divide STEPS_PER_REVOLUTION,
-     which would result in the image alignment drifting significantly over a few months.
-
-   INITIAL_IMAGE_ANGLE_STEPS = the number of steps from the center of the new moon image
-     to the initial image.  That is, the initial angle of the wheel relative to the new moon.
-*/
-const int MIN_DARK_STEPS = STEPS_PER_REVOLUTION / (360 / 5); // 5 degrees
-const int NUM_MOON_IMAGES = 8;
-const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
-const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
-const int STEPS_SLOT_TO_MOON = 33; //XXX need to calibrate this when the clock is finished.
-const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7;  //XXX need to change this when the mech. design is done.
-
-/*
-   curentAngleSteps = the current position of the wheel, in (fractional) steps
-   from the center of the new moon.
-
-   A floating-point number to avoid accumulating errors
-   in dividing a revolution by the number of images,
-   which would cause the images to drift out of place
-   after a few months of constant running.
-*/
-double currentAngleSteps;
 
 // WiFi Client control object. SAY MORE ABOUT THIS.
 HTTPClient httpGet;
@@ -245,41 +258,53 @@ int illuminatedPC;       // percent (0..100) of the moon's surface that's illumi
 //                           "\n";
 const char PageUrl[] = "http://astro.ukho.gov.uk/nao/miscellanea/birs2.html";
 
-/*
-   Our state machine, that keeps track of what to do next.
 
-   STATE_ERROR = encountered and unrecoverable error. Do nothing more.
-   STATE_FIND_SLOT = search for the slot that tells us the wheel position.
-   STATE_WEB_QUERY = query the web site to find the time and moon phase.
-   STATE_TURN_WHEEL = turn the wheel to show the correct moon phase.
-   STATE_WAITING = waiting for the time to query the site again.
-   STATE_DONE = used only for development. Says we're done.
-
-   state = the current state of the program.
-
-*/
-const byte STATE_ERROR        = 0;
-const byte STATE_FIND_SLOT    = 1;
-const byte STATE_WEB_QUERY    = 2;
-const byte STATE_TURN_WHEEL   = 3;
-const byte STATE_WAITING      = 4;
-const byte STATE_DONE         = 5;
 byte state;
 
+/*
+   WiFi access point parameters.
+
+   wifiSsid = SSID of the network to connect to. Read from EEPROM.
+   wifiPassword = Password of the network. Read from EEPROM.
+   wifiSecurity = security mode of the network.
+   wifiTimeoutMs = timeout (in milliseconds) to wait before deciding
+    the connection to the network has failed.
+*/
+char *wifiSsid;
+char *wifiPassword;
+//XXX should put the security type in the EEPROM as well.
+//unsigned int wifiSecurity = WLAN_SEC_WPA2; // security type of the network.
+unsigned int wifiTimeoutMs = 20 * 1000;  // connection timeout.
+
+/*
+ * Declarations of our functions. See their definitions (code)
+ * for how they're used.
+ */
+boolean doNetworkWork();
+boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
+              int *pIlluminatedPC);
+boolean findDate(struct HttpDateTime *pDateTimeUTC);
+double readDouble();
+boolean findWheelSlot();
+boolean turnWheelToPhase(double daysSinceNewMoon);
+void step(int steps);
+char *readEEPROMString(int baseAddress, int stringNumber);
+void  Ram_TableDisplay(void);
 boolean findWheelSlot();
 boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
               int *pIlluminatedPC);
 boolean turnWheelToPhase(double daysSinceNewMoon);
 
+// Called once automatically on Reset.
 void setup() {
   Serial.begin(9600);
 
   // Set up all our pins.
 
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH); // ESP8266 Thing Dev LED is Active Low
+  pinMode(PIN_LED_L, OUTPUT);
+  digitalWrite(PIN_LED_L, HIGH); // ESP8266 Thing Dev LED is Active Low
 
-  pinMode(PIN_OPTO_LIGHT, INPUT);
+  pinMode(PIN_LIGHT_DETECTED, INPUT);
 
   pinMode(PIN_STEP_ORANGE, OUTPUT);
   digitalWrite(PIN_STEP_ORANGE, LOW);
@@ -319,9 +344,9 @@ void loop() {
     case STATE_ERROR: // unrecoverable error.  Stop.
       // Blink an led
       if ((millis() % 1000) < 500) {
-        digitalWrite(PIN_LED, HIGH);
+        digitalWrite(PIN_LED_L, HIGH);
       } else {
-        digitalWrite(PIN_LED, LOW);
+        digitalWrite(PIN_LED_L, LOW);
       }
       delay(10); // so we don't spend all our time doing digitalWrite()
       break;
@@ -375,7 +400,7 @@ void loop() {
 
 /*
    Turns the stepper motor until the slot appears in front of the
-   opto-interrupter. We need to do this on Reset to move the wheel
+   photo-interrupter. We need to do this on Reset to move the wheel
    to a known position.
 
    In case we're already somewhere in the slot,
@@ -394,7 +419,7 @@ boolean findWheelSlot() {
     step(1);
 
     if (!seenMinDark) {
-      if (digitalRead(PIN_OPTO_LIGHT) == HIGH) {
+      if (digitalRead(PIN_LIGHT_DETECTED) == HIGH) {
         continue; // light
       }
       ++count;
@@ -407,7 +432,7 @@ boolean findWheelSlot() {
       count = 0;
     } else {
       // Searching for the slot.
-      if (digitalRead(PIN_OPTO_LIGHT) == LOW) {
+      if (digitalRead(PIN_LIGHT_DETECTED) == LOW) {
         continue; // still dark
       }
       ++count;
@@ -487,10 +512,10 @@ boolean doNetworkWork() {
   // Wait for the connection or timeout. Put this in the state machine.
   int wifiStatus = WiFi.status();
   while (wifiStatus != WL_CONNECTED)
-  {    
+  {
     delay(100);
     Serial.print(".");
-    
+
     wifiStatus = WiFi.status();
   }
 
@@ -540,27 +565,27 @@ boolean query(struct HttpDateTime *pDateTimeUTC, double *pDaysSinceNewMoon,
 
   pHttpStream = httpGet.getStreamPtr();
 
-//ESP8266 lib doesn't return headers this way.
-//  if (!findDate(pDateTimeUTC)) {
-//    Serial.println(F("No Date: in header"));
-//    return false;
-//  }
-//
-//  Serial.println(F("Found Date: "));
-//  Serial.print(F("days since Sunday: "));
-//  Serial.println(pDateTimeUTC->daySinceSunday);
-//  Serial.print(F("day of month: "));
-//  Serial.println(pDateTimeUTC->day);
-//  Serial.print(F("Month: "));
-//  Serial.println(pDateTimeUTC->month);
-//  Serial.print(F("Year: "));
-//  Serial.println(pDateTimeUTC->year);
-//  Serial.print(F("Hour: "));
-//  Serial.println(pDateTimeUTC->hour);
-//  Serial.print(F("Minute: "));
-//  Serial.println(pDateTimeUTC->minute);
-//  Serial.print(F("Second: "));
-//  Serial.println(pDateTimeUTC->second);
+  //ESP8266 lib doesn't return headers this way.
+  //  if (!findDate(pDateTimeUTC)) {
+  //    Serial.println(F("No Date: in header"));
+  //    return false;
+  //  }
+  //
+  //  Serial.println(F("Found Date: "));
+  //  Serial.print(F("days since Sunday: "));
+  //  Serial.println(pDateTimeUTC->daySinceSunday);
+  //  Serial.print(F("day of month: "));
+  //  Serial.println(pDateTimeUTC->day);
+  //  Serial.print(F("Month: "));
+  //  Serial.println(pDateTimeUTC->month);
+  //  Serial.print(F("Year: "));
+  //  Serial.println(pDateTimeUTC->year);
+  //  Serial.print(F("Hour: "));
+  //  Serial.println(pDateTimeUTC->hour);
+  //  Serial.print(F("Minute: "));
+  //  Serial.println(pDateTimeUTC->minute);
+  //  Serial.print(F("Second: "));
+  //  Serial.println(pDateTimeUTC->second);
 
   if (!pHttpStream->find("age of the Moon is ")) {
     Serial.println(F("No age of moon in response."));
@@ -932,18 +957,18 @@ void step(int steps) {
    From https://github.com/bneedhamia/write_eeprom_strings example
 */
 /*
- * Reads a string from EEPROM.  Copy this code into your program that reads EEPROM.
- * 
- * baseAddress = EEPROM address of the first byte in EEPROM to read from.
- * stringNumber = index of the string to retrieve (string 0, string 1, etc.)
- * 
- * Assumes EEPROM contains a list of null-terminated strings,
- * terminated by EEPROM_END_MARK.
- * 
- * Returns:
- * A pointer to a dynamically-allocated string read from EEPROM,
- * or null if no such string was found.
- */
+   Reads a string from EEPROM.  Copy this code into your program that reads EEPROM.
+
+   baseAddress = EEPROM address of the first byte in EEPROM to read from.
+   stringNumber = index of the string to retrieve (string 0, string 1, etc.)
+
+   Assumes EEPROM contains a list of null-terminated strings,
+   terminated by EEPROM_END_MARK.
+
+   Returns:
+   A pointer to a dynamically-allocated string read from EEPROM,
+   or null if no such string was found.
+*/
 char *readEEPROMString(int baseAddress, int stringNumber) {
   int start;   // EEPROM address of the first byte of the string to return.
   int length;  // length (bytes) of the string to return, less the terminating null.
@@ -1018,36 +1043,36 @@ void	Ram_TableDisplay(void)
 {
   Serial.println("No Ram display on ESP8266");
   // ESP8266 does have "ESP.getFreeHeap() and doesn't have __malloc_margin.
-//  char stack = 1;
-//  extern char *__data_start;
-//  extern char *__data_end;
-//  extern char *__bss_start;
-//  extern char *__bss_end;
-//  extern char *__heap_start;
-//  extern char *__heap_end;
-//
-//  int	data_size	=	(int)&__data_end - (int)&__data_start;
-//  int	bss_size	=	(int)&__bss_end - (int)&__data_end;
-//  int	heap_end	=	(int)&stack - (int)&__malloc_margin; Unsupported on ESP8266
-//  int	heap_size	=	heap_end - (int)&__bss_end;
-//  int	stack_size	=	RAMEND - (int)&stack + 1;
-//  int	available	=	(RAMEND - (int)&__data_start + 1);
-//  available	-=	data_size + bss_size + heap_size + stack_size;
-//
-//  Serial.println();
-//  Serial.print(F("data size     = "));
-//  Serial.println(data_size);
-//  Serial.print(F("bss_size      = "));
-//  Serial.println(bss_size);
-//  Serial.print(F("heap size     = "));
-//  Serial.println(heap_size);
-//  Serial.print(F("stack used    = "));
-//  Serial.println(stack_size);
-//  Serial.print(F("stack available     = "));
-//  Serial.println(available);
-//  Serial.print(F("Free memory   = "));
-//  Serial.println(get_free_memory());
-//  Serial.println();
+  //  char stack = 1;
+  //  extern char *__data_start;
+  //  extern char *__data_end;
+  //  extern char *__bss_start;
+  //  extern char *__bss_end;
+  //  extern char *__heap_start;
+  //  extern char *__heap_end;
+  //
+  //  int	data_size	=	(int)&__data_end - (int)&__data_start;
+  //  int	bss_size	=	(int)&__bss_end - (int)&__data_end;
+  //  int	heap_end	=	(int)&stack - (int)&__malloc_margin; Unsupported on ESP8266
+  //  int	heap_size	=	heap_end - (int)&__bss_end;
+  //  int	stack_size	=	RAMEND - (int)&stack + 1;
+  //  int	available	=	(RAMEND - (int)&__data_start + 1);
+  //  available	-=	data_size + bss_size + heap_size + stack_size;
+  //
+  //  Serial.println();
+  //  Serial.print(F("data size     = "));
+  //  Serial.println(data_size);
+  //  Serial.print(F("bss_size      = "));
+  //  Serial.println(bss_size);
+  //  Serial.print(F("heap size     = "));
+  //  Serial.println(heap_size);
+  //  Serial.print(F("stack used    = "));
+  //  Serial.println(stack_size);
+  //  Serial.print(F("stack available     = "));
+  //  Serial.println(available);
+  //  Serial.print(F("Free memory   = "));
+  //  Serial.println(get_free_memory());
+  //  Serial.println();
 
 }
 
