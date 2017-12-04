@@ -20,9 +20,9 @@ State of the project: On reset, the Sketch turns the lunar disk wheel to find th
 the first lunar image in the (to be built) clock window. It then connects to the local WiFi,
 reads and parses HM Almanac page mentioned above, and rotates the wheel to show the corresponding
 lunar image. It then stops. Further major changes await the mechanical design.
+I'm in the midst of trying out 3D print designs for the clock parts.
 
-Next steps: Complete rewriting the stepper motor code to step once per loop();
-start sketching the rest of the to-be-laser-cut mechanical parts;
+Next steps: try out 3D printing instead of laser cutting parts;
 finish writing the state machine code, to retry wifi failures and query the site once every day.
 
 ## Files
