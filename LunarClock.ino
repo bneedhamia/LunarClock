@@ -168,7 +168,7 @@ const int STEPS_SLOT_TO_MOON = 33; //XXX need to calibrate this when the clock i
 const int NUM_MOON_IMAGES = 8;
 const double DAYS_PER_IMAGE = 29.53059 / (double) NUM_MOON_IMAGES;
 const double STEPS_PER_IMAGE = ((double) STEPS_PER_REVOLUTION) / NUM_MOON_IMAGES;
-const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 7.0;  //XXX need to change this when the mech. design is done.
+const double INITIAL_IMAGE_ANGLE_STEPS = STEPS_PER_IMAGE * 5.0;  //XXX need to change this when the mech. design is done.
 
 /*
    Width (milliseconds) of each (half) step in the stepper motor sequence.

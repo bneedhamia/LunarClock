@@ -19,18 +19,20 @@ NOTE: This is a work in progress.
 State of the project: On reset, the Sketch turns the lunar disk wheel to find the slot, then turns it to align
 the first lunar image in the (to be built) clock window. It then connects to the local WiFi,
 reads and parses HM Almanac page mentioned above, and rotates the wheel to show the corresponding
-lunar image. It then stops. Further major changes await the mechanical design.
-I'm in the midst of trying out 3D print designs for the clock parts.
+lunar image. It then stops. Further major changes await the design of the clock face and box.
 
-Next steps: try out 3D printing instead of laser cutting parts;
+Next steps: design the 3D printed clock face and box;
 finish writing the state machine code, to retry wifi failures and query the site once every day.
 
 ## Files
 * BillOfMaterials.ods = the parts list
 * LICENSE = the project GPL2 license file
-* LunarClock.ino = the Arduino Sketch
+* LunarClock.ino = the ESP8266 Thing Dev board Arduino Sketch
 * LunarClockDiary.odt = my project diary.  All of the little details of the path from idea to reality (so far)
-* LunarWheel.svg = Inkscape (laser cutting) file for the wheel of lunar images.
+* lunarDisk.FCStd = FreeCAD model file for the 3D printed lunar images disk and holder for stepper motor and photo interupter.
+* LunarDisk.stl = 3D printable file of the disk of lunar images. Swap filament in mid-print to print light lunar images on a dark disk.
+* LunarWheel.svg = (obsolete) Inkscape (laser cutting) file for the wheel of lunar images.
 * Project.jpg = a photo of the project so far
 * README.md = this file
-* XXXXX to add as I create them: fritzing diagram; mechanical notes; other files for laser cutting.
+* StepperHolder.stl = 3D Printable file for the plate that holds the stepper motor and photo interrupter.
+* XXXXX to add as I create them: fritzing diagram; mechanical and assembly notes; other files for 3D printing.
